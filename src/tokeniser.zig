@@ -1,7 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 
-const TokenType = enum {
+pub const TokenType = enum {
     identifier,
     integer_bin,
     integer_oct,
@@ -90,14 +90,17 @@ inline fn equals_or_single(cur_char: u8, equals_tok: TokenType, single_tok: Toke
 
 pub const Token: type = struct {
     type: TokenType,
-    start: usize,
+    start: Tokeniser.Index,
+    end: Tokeniser.Index,
 };
 
 pub const Tokeniser = struct {
     buf: []const u8,
-    cur_tok_start: usize,
-    cur_pos: usize,
+    cur_tok_start: Index,
+    cur_pos: Index,
     cur_token: ?Token,
+
+    pub const Index = u32;
 
     fn get_token_type(tokeniser: *Tokeniser) !TokenType {
         var state: TokenState = .start;
@@ -425,6 +428,7 @@ pub const Tokeniser = struct {
         return Token{
             .type = tok_type,
             .start = tokeniser.cur_tok_start,
+            .end = tokeniser.cur_pos,
         };
     }
 
@@ -441,6 +445,7 @@ pub const Tokeniser = struct {
         const token = Token{
             .type = tok_type,
             .start = tokeniser.cur_tok_start,
+            .end = tokeniser.cur_pos,
         };
 
         tokeniser.cur_token = token;
