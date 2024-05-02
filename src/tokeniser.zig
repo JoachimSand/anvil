@@ -110,7 +110,7 @@ pub const Tokeniser = struct {
         while (tokeniser.cur_pos < tokeniser.buf.len) {
             var cur_char = buf[tokeniser.cur_pos];
 
-            print("State is {any}, char is {u}\n", .{ state, cur_char });
+            // print("State is {any}, char is {u}\n", .{ state, cur_char });
 
             switch (state) {
                 .start => switch (cur_char) {
@@ -184,7 +184,7 @@ pub const Tokeniser = struct {
                 },
                 .identifier_or_keyword => {
                     switch (cur_char) {
-                        'A'...'Z', 'a'...'z', '_' => {},
+                        'A'...'Z', 'a'...'z', '0'...'9', '_' => {},
                         else => {
                             // tok.type = .identifier;
                             // TODO: Check if keyword
