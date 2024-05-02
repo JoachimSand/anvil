@@ -88,26 +88,31 @@ inline fn equals_or_single(cur_char: u8, equals_tok: TokenType, single_tok: Toke
     return if (cur_char == '=') equals_tok else single_tok;
 }
 
-pub const Token: type = struct {
+pub const TokenFull: type = struct {
     type: TokenType,
-    start: Tokeniser.Index,
-    end: Tokeniser.Index,
+    start: SourceIndex,
+    end: SourceIndex,
+
+    pub const SourceIndex = u32;
+};
+
+pub const Token = struct {
+    type: TokenType,
+    start: TokenFull.SourceIndex,
 };
 
 pub const Tokeniser = struct {
-    buf: []const u8,
-    cur_tok_start: Index,
-    cur_pos: Index,
-    cur_token: ?Token,
-
-    pub const Index = u32;
+    src: []const u8,
+    cur_tok_start: TokenFull.SourceIndex,
+    cur_pos: TokenFull.SourceIndex,
+    cur_token: ?TokenFull,
 
     fn get_token_type(tokeniser: *Tokeniser) !TokenType {
         var state: TokenState = .start;
-        const buf = tokeniser.buf;
+        const buf = tokeniser.src;
         tokeniser.cur_tok_start = tokeniser.cur_pos;
 
-        while (tokeniser.cur_pos < tokeniser.buf.len) {
+        while (tokeniser.cur_pos < tokeniser.src.len) {
             var cur_char = buf[tokeniser.cur_pos];
 
             // print("State is {any}, char is {u}\n", .{ state, cur_char });
@@ -414,35 +419,35 @@ pub const Tokeniser = struct {
         }
     }
 
-    pub fn next_token(tokeniser: *Tokeniser) !Token {
+    pub fn next_token(tokeniser: *Tokeniser) !TokenFull {
         if (tokeniser.cur_token) |token| {
             tokeniser.cur_token = null;
             return token;
         }
 
-        if (tokeniser.cur_pos >= tokeniser.buf.len) {
+        if (tokeniser.cur_pos >= tokeniser.src.len) {
             return error.EndOfInput;
         }
 
         var tok_type = try tokeniser.get_token_type();
-        return Token{
+        return TokenFull{
             .type = tok_type,
             .start = tokeniser.cur_tok_start,
             .end = tokeniser.cur_pos,
         };
     }
 
-    pub fn peek_token(tokeniser: *Tokeniser) !Token {
+    pub fn peek_token(tokeniser: *Tokeniser) !TokenFull {
         if (tokeniser.cur_token) |token| {
             return token;
         }
 
-        if (tokeniser.cur_pos >= tokeniser.buf.len) {
+        if (tokeniser.cur_pos >= tokeniser.src.len) {
             return error.EndOfInput;
         }
 
         var tok_type = try tokeniser.get_token_type();
-        const token = Token{
+        const token = TokenFull{
             .type = tok_type,
             .start = tokeniser.cur_tok_start,
             .end = tokeniser.cur_pos,
