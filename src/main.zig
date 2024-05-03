@@ -274,12 +274,28 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const stdin = std.io.getStdIn().reader();
     var input = std.ArrayList(u8).init(allocator);
     defer input.deinit();
 
-    try stdin.streamUntilDelimiter(input.writer(), '\n', null);
-    print("Got input {s} with length {} \n", .{ input.items, input.items.len });
+    var read_from_stdin = true;
+    var args = std.process.args();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "-f", arg)) {
+            read_from_stdin = false;
+        }
+    }
+
+    if (read_from_stdin) {
+        const stdin = std.io.getStdIn().reader();
+        try stdin.streamUntilDelimiter(input.writer(), '\n', null);
+        print("Got input {s} with length {} \n", .{ input.items, input.items.len });
+    } else {
+        print("Reading from file test.anv\n", .{});
+        var file = try std.fs.cwd().openFile("test.anv", .{});
+        defer file.close();
+
+        _ = try file.reader().readAllArrayList(&input, 10000);
+    }
 
     // const node_tag = NodeTag{ .param_list = .{ .hello = 10 } };
     // print("{any}\n", .{node_tag});

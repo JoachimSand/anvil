@@ -220,6 +220,10 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                         cur_char = src[pos];
                     }
                     start = pos;
+                    if (pos >= src.len - 1) {
+                        return error.EarlyTermination;
+                    }
+
                     continue;
                 },
                 else => @panic("Start state not handled"),
