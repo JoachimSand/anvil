@@ -168,6 +168,16 @@ fn parse_expr(parser: *Parser) ParseError!Node.Index {
     return try parse_primary_expr(parser);
 }
 
+fn print_ast(nodes: Parser.NodeList, tokens: Parser.TokenList, cur_node: Parser.NodeIndex) !void {
+    print("At node {any} ", .{cur_node});
+    switch (nodes.items[cur_node]) {
+        .integer_lit => |tok_index| {
+            print("Integer literal {any} \n", .{tokens.get(tok_index)});
+        },
+        else => return error.Unimplemented,
+    }
+}
+
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     print("All your {s} are belong to us.\n", .{"codebase"});
@@ -203,7 +213,8 @@ pub fn main() !void {
 
     const node_id = try parse_var_decl(&parser);
 
-    print("Root node {any}", .{parser.nodes.items[node_id]});
+    print("Root node {any}\n", .{parser.nodes.items[node_id]});
+    try print_ast(parser.nodes, parser.tokens, node_id);
     // // stdout is for the actual output of your application, for example if you
     // // are implementing gzip, then only the compressed bytes should be sent to
     // // stdout, not any debugging messages.
