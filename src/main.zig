@@ -6,9 +6,11 @@ const Tokeniser = tokeniser_mod.Tokeniser;
 const TokenFull = tokeniser_mod.TokenFull;
 const Token = tokeniser_mod.Token;
 const TokenType = tokeniser_mod.TokenType;
-const SourceIndex = TokenFull.SourceIndex;
+// const SourceIndex = tokeniser_mod.SourceIndex;
+const token_to_str = tokeniser_mod.token_to_str;
 
-const t = std.zig.Ast;
+const unicode = std.unicode;
+
 // AST node and its associated data.
 // Note that we try to avoid going beyond 16 bytes per node.
 // Tag takes up 1 byte, meaning we have at most 3 available
@@ -16,20 +18,20 @@ const t = std.zig.Ast;
 const Node = union(enum) {
     // identifier ":" type
     parameter: struct {
-        identifier: SourceIndex,
+        identifier: Parser.TokenIndex,
         param_type: Index,
     },
 
     var_decl_type: struct {
-        identifier: SourceIndex,
+        identifier: Parser.TokenIndex,
         decl_type: u32,
     },
     var_decl_expr: struct {
-        identifier: SourceIndex,
+        identifier: Parser.TokenIndex,
         decl_expr: u32,
     },
     var_decl_full: struct {
-        identifier: SourceIndex,
+        identifier: Parser.TokenIndex,
         decl_type: u32,
         decl_expr: u32,
     },
@@ -40,10 +42,9 @@ const Node = union(enum) {
         statements: NodeArray,
     },
 
-    add: BinaryExp,
-    sub: BinaryExp,
+    binary_exp: BinaryExp,
 
-    integer_lit: SourceIndex,
+    integer_lit: Parser.TokenIndex,
 
     const Index = u32;
     const ExtraIndex = u32;
@@ -54,9 +55,9 @@ const Node = union(enum) {
     };
 
     const BinaryExp = struct {
-        op_tok: SourceIndex,
-        left: Index,
-        right: Index,
+        op_tok: Parser.TokenIndex,
+        lhs: Index,
+        rhs: Index,
     };
 };
 
@@ -69,6 +70,8 @@ const ParseSpecificError = error{
 const ParseError = ParseSpecificError || std.mem.Allocator.Error;
 
 const Parser = struct {
+    src: []const u8,
+
     nodes: NodeList,
     tokens: TokenList,
     cur_token: TokenIndex = 0,
@@ -84,7 +87,7 @@ const Parser = struct {
     }
 
     fn next_token(p: *Parser) ParseError!TokenInfo {
-        if (p.cur_token + 1 < p.tokens.len) {
+        if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
             p.cur_token += 1;
             return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
@@ -93,8 +96,18 @@ const Parser = struct {
         }
     }
 
+    fn expect_token(p: *Parser, tok_type: TokenType) ParseError!TokenInfo {
+        const tok = try p.next_token();
+
+        if (tok.type != tok_type) {
+            return error.UnexpectedToken;
+        } else {
+            return tok;
+        }
+    }
+
     fn peek_token(p: *Parser) !TokenInfo {
-        if (p.cur_token + 1 < p.tokens.len) {
+        if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
             return TokenInfo{ .type = tok.type, .index = p.cur_token };
         } else {
@@ -102,14 +115,8 @@ const Parser = struct {
         }
     }
 
-    fn expect_token(p: *Parser) ParseError!TokenInfo {
-        if (p.cur_token + 1 < p.tokens.len) {
-            const tok = p.tokens.get(p.cur_token);
-            p.cur_token += 1;
-            return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
-        } else {
-            return error.EarlyTermination;
-        }
+    fn get_tok_str(p: *Parser, tok_index: TokenIndex) []const u8 {
+        return token_to_str(p.tokens.get(tok_index), p.src);
     }
 
     const TokenIndex = u32;
@@ -137,8 +144,10 @@ fn parse_var_decl(p: *Parser) ParseError!Node.Index {
     } else {
         _ = try p.next_token();
 
-        const expr = try parse_expr(p);
+        const expr = try parse_expr(p, 0);
         const node: Node = Node{ .var_decl_expr = .{ .identifier = id_tok.index, .decl_expr = expr } };
+        _ = try p.expect_token(.semicolon);
+
         return try p.append_node(node);
     }
 
@@ -162,18 +171,95 @@ fn parse_primary_expr(p: *Parser) ParseError!Node.Index {
     return error.Unimplemented;
 }
 
-fn parse_expr(parser: *Parser) ParseError!Node.Index {
-    // Parse an "atom"
-    // TODO: Add pre-fix and post-fix parsing
-    return try parse_primary_expr(parser);
+// 1: BoolOrExpr <- BoolAndExpr ("or" BoolAndExpr)*
+// 2: BoolAndExpr <- CompareExpr ("and" CompareExpr)*
+// 3: CompareExpr <- BitwiseExpr (("==" / "!=" / ">=" / "<=" / ">" / "<") BitwiseExpr)?
+// 4: BitwiseExpr <- BitShiftExpr (("&" / "|" / "^" ) BitShiftExpr)*
+// 5: BitShiftExpr <- AdditionExpr (("<<" / ">>") AdditionExpr)*
+// 6: AdditionExpr <- MultiplyExpr (("+" / "-") MultiplyExpr)*
+// 7: MultiplyExpr <- PrefixExpr (("*" / "/") PrefixExpr)*
+
+const Precedence = u4;
+inline fn operator_precedence(token_type: TokenType) ?Precedence {
+    switch (token_type) {
+        .keyword_or => return 1,
+        .keyword_and => return 2,
+        .plus, .minus => return 6,
+        .asterisk, .slash => return 7,
+
+        else => return null,
+    }
 }
 
-fn print_ast(nodes: Parser.NodeList, tokens: Parser.TokenList, cur_node: Parser.NodeIndex) !void {
-    print("At node {any} ", .{cur_node});
-    switch (nodes.items[cur_node]) {
+fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
+    // Parse an "atom"/left hand side of expression
+    // TODO: Add pre-fix and post-fix parsing
+    var lhs = try parse_primary_expr(p);
+    var maybe_op = try p.peek_token();
+
+    var cur_prec = start_prec;
+
+    while (operator_precedence(maybe_op.type)) |op_prec| {
+        if (op_prec <= cur_prec) {
+            return lhs;
+        }
+
+        const op_token = try p.next_token();
+        print("op: {any}\n", .{op_token});
+
+        const rhs = try parse_expr(p, op_prec);
+        const op_node = Node{ .binary_exp = Node.BinaryExp{ .op_tok = op_token.index, .lhs = lhs, .rhs = rhs } };
+
+        lhs = try p.append_node(op_node);
+        maybe_op = try p.peek_token();
+    }
+
+    return lhs;
+}
+
+fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parser.NodeIndex) !void {
+    // print("At node {any} ", .{cur_node});
+    print("{s}", .{prefix.items});
+    var pre_str: []const u8 = "";
+    if (is_last) {
+        print("└──", .{});
+        pre_str = "    ";
+        try prefix.appendSlice(pre_str);
+    } else {
+        print("├──", .{});
+        pre_str = "│  ";
+        try prefix.appendSlice(pre_str);
+    }
+    defer prefix.items.len -= pre_str.len;
+
+    // f is_last {
+    //     print!("└──");
+    //     new_prefix.push_str("    ");
+    // } else {
+    //     print!("├──");
+    //     new_prefix.push_str("│  ");
+    // }
+
+    switch (p.nodes.items[cur_node]) {
+        // Base cases
         .integer_lit => |tok_index| {
-            print("Integer literal {any} \n", .{tokens.get(tok_index)});
+            const str = p.get_tok_str(tok_index);
+            print("Integer literal {s} \n", .{str});
         },
+
+        .binary_exp => |bin_exp| {
+            const op_str = p.get_tok_str(bin_exp.op_tok);
+            print("{s}\n", .{op_str});
+            try print_ast(p, prefix, false, bin_exp.lhs);
+            try print_ast(p, prefix, true, bin_exp.rhs);
+        },
+
+        .var_decl_expr => |decl| {
+            const id_str = p.get_tok_str(decl.identifier);
+            print("Var. decl for {s} \n", .{id_str});
+            try print_ast(p, prefix, true, decl.decl_expr);
+        },
+
         else => return error.Unimplemented,
     }
 }
@@ -198,7 +284,7 @@ pub fn main() !void {
     // const node_tag = NodeTag{ .param_list = .{ .hello = 10 } };
     // print("{any}\n", .{node_tag});
 
-    var parser = Parser{ .nodes = Parser.NodeList.init(allocator), .tokens = Parser.TokenList{} };
+    var parser = Parser{ .src = input.items, .nodes = Parser.NodeList.init(allocator), .tokens = Parser.TokenList{} };
     defer parser.tokens.deinit(allocator);
     defer parser.nodes.deinit();
 
@@ -211,10 +297,14 @@ pub fn main() !void {
         print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
     }
 
-    const node_id = try parse_var_decl(&parser);
+    const root_id = try parse_var_decl(&parser);
 
-    print("Root node {any}\n", .{parser.nodes.items[node_id]});
-    try print_ast(parser.nodes, parser.tokens, node_id);
+    print("Root node {any}\n", .{parser.nodes.items[root_id]});
+    var prefix = std.ArrayList(u8).init(allocator);
+    defer prefix.deinit();
+
+    print("Root\n", .{});
+    try print_ast(&parser, &prefix, true, root_id);
     // // stdout is for the actual output of your application, for example if you
     // // are implementing gzip, then only the compressed bytes should be sent to
     // // stdout, not any debugging messages.

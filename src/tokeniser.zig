@@ -51,6 +51,8 @@ pub const TokenType = enum {
     semicolon, // ";"
 
     keyword_fn,
+    keyword_or,
+    keyword_and,
 };
 
 // Approx. subset of token types. Enumerates the possible characters the tokeniser
@@ -88,336 +90,28 @@ inline fn equals_or_single(cur_char: u8, equals_tok: TokenType, single_tok: Toke
     return if (cur_char == '=') equals_tok else single_tok;
 }
 
+pub const SourceIndex = u32;
+
+pub const Token = struct {
+    type: TokenType,
+    start: SourceIndex,
+};
+
 pub const TokenFull: type = struct {
     type: TokenType,
     start: SourceIndex,
     end: SourceIndex,
 
-    pub const SourceIndex = u32;
-};
-
-pub const Token = struct {
-    type: TokenType,
-    start: TokenFull.SourceIndex,
+    fn init(ttype: TokenType, start: SourceIndex, end: SourceIndex) TokenFull {
+        return TokenFull{ .type = ttype, .start = start, .end = end };
+    }
 };
 
 pub const Tokeniser = struct {
     src: []const u8,
-    cur_tok_start: TokenFull.SourceIndex,
-    cur_pos: TokenFull.SourceIndex,
+    cur_tok_start: SourceIndex,
+    cur_pos: SourceIndex,
     cur_token: ?TokenFull,
-
-    fn get_token_type(tokeniser: *Tokeniser) !TokenType {
-        var state: TokenState = .start;
-        const buf = tokeniser.src;
-        tokeniser.cur_tok_start = tokeniser.cur_pos;
-
-        while (tokeniser.cur_pos < tokeniser.src.len) {
-            var cur_char = buf[tokeniser.cur_pos];
-
-            // print("State is {any}, char is {u}\n", .{ state, cur_char });
-
-            switch (state) {
-                .start => switch (cur_char) {
-                    'A'...'Z', 'a'...'z' => state = .identifier_or_keyword,
-                    '0' => {
-                        state = .integer_unknown;
-                    },
-                    '1'...'9' => {
-                        state = .integer_dec;
-                    },
-
-                    '=' => state = .equal,
-                    '+' => state = .plus,
-                    '-' => state = .minus,
-                    '*' => state = .asterisk,
-                    '/' => state = .slash,
-                    '|' => state = .pipe,
-                    '&' => state = .ampersand,
-                    '^' => state = .caret,
-                    '!' => state = .not,
-                    '<' => state = .l_arrow,
-                    '>' => state = .r_arrow,
-                    '.' => state = .dot,
-
-                    '(' => {
-                        tokeniser.cur_pos += 1;
-                        return .l_paren;
-                    },
-                    ')' => {
-                        tokeniser.cur_pos += 1;
-                        return .r_paren;
-                    },
-                    '[' => {
-                        tokeniser.cur_pos += 1;
-                        return .l_bracket;
-                    },
-                    ']' => {
-                        tokeniser.cur_pos += 1;
-                        return .r_bracket;
-                    },
-                    '{' => {
-                        tokeniser.cur_pos += 1;
-                        return .l_brace;
-                    },
-                    '}' => {
-                        tokeniser.cur_pos += 1;
-                        return .r_brace;
-                    },
-                    ',' => {
-                        tokeniser.cur_pos += 1;
-                        return .comma;
-                    },
-                    ':' => {
-                        tokeniser.cur_pos += 1;
-                        return .colon;
-                    },
-                    ';' => {
-                        tokeniser.cur_pos += 1;
-                        return .semicolon;
-                    },
-
-                    '\n', '\t', ' ' => {
-                        while (tokeniser.cur_pos < buf.len and (cur_char == ' ' or cur_char == '\t')) {
-                            tokeniser.cur_pos += 1;
-                            cur_char = buf[tokeniser.cur_pos];
-                        }
-                        tokeniser.cur_tok_start = tokeniser.cur_pos;
-                        continue;
-                    },
-                    else => @panic("Start state not handled"),
-                },
-                .identifier_or_keyword => {
-                    switch (cur_char) {
-                        'A'...'Z', 'a'...'z', '0'...'9', '_' => {},
-                        else => {
-                            // tok.type = .identifier;
-                            // TODO: Check if keyword
-                            if (std.mem.eql(u8, buf[tokeniser.cur_tok_start..tokeniser.cur_pos], "fn")) {
-                                return .keyword_fn;
-                            }
-
-                            return .identifier;
-                        },
-                    }
-                },
-
-                .integer_unknown => {
-                    switch (cur_char) {
-                        'b' => {
-                            state = .pending_integer_bin;
-                        },
-                        'o' => {
-                            state = .pending_integer_oct;
-                        },
-                        'x' => {
-                            state = .pending_integer_hex;
-                        },
-                        else => return error.InvalidIntegerLit,
-                    }
-                },
-                .integer_dec => switch (cur_char) {
-                    '0'...'9', '_' => {},
-                    else => return .integer_dec,
-                },
-
-                .pending_integer_bin => switch (cur_char) {
-                    '0', '1' => {
-                        state = .integer_bin;
-                        tokeniser.cur_tok_start = tokeniser.cur_pos;
-                    },
-                    else => return error.InvalidIntegerLit,
-                },
-                .pending_integer_oct => switch (cur_char) {
-                    '0'...'7' => {
-                        state = .integer_oct;
-                        tokeniser.cur_tok_start = tokeniser.cur_pos;
-                    },
-                    else => return error.InvalidIntegerLit,
-                },
-                .pending_integer_hex => switch (cur_char) {
-                    '0'...'9', 'a'...'f', 'A'...'F' => {
-                        state = .integer_hex;
-                        tokeniser.cur_tok_start = tokeniser.cur_pos;
-                    },
-                    else => return error.InvalidIntegerLit,
-                },
-
-                .integer_bin => switch (cur_char) {
-                    '0', '1', '_' => {},
-                    else => return .integer_bin,
-                },
-                .integer_oct => switch (cur_char) {
-                    '0'...'7', '_' => {},
-                    else => return .integer_oct,
-                },
-                .integer_hex => switch (cur_char) {
-                    '0'...'9', 'a'...'f', 'A'...'F', '_' => {},
-                    else => return .integer_hex,
-                },
-
-                .equal => return equals_or_single(cur_char, .equal2, .equal),
-                .plus => return equals_or_single(cur_char, .plus_equal, .plus),
-                .minus => {
-                    switch (cur_char) {
-                        '>' => {
-                            tokeniser.cur_pos += 1;
-                            return .minus_arrow;
-                        },
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .minus_equal;
-                        },
-                        else => return .minus,
-                    }
-                },
-                .asterisk => return equals_or_single(cur_char, .asterisk_equal, .asterisk),
-                .slash => {
-                    switch (cur_char) {
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .slash_equal;
-                        },
-                        '/' => {
-                            // line comment
-                            state = .slash2;
-                        },
-                        else => return .slash,
-                    }
-                },
-                .slash2 => {
-                    while (tokeniser.cur_pos < buf.len - 1 and cur_char != '\n') {
-                        tokeniser.cur_pos += 1;
-                        cur_char = buf[tokeniser.cur_pos];
-                    }
-                    tokeniser.cur_tok_start = tokeniser.cur_pos;
-                    state = .start;
-                    continue;
-                },
-
-                .pipe => {
-                    switch (cur_char) {
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .pipe_equal;
-                        },
-                        '|' => {
-                            tokeniser.cur_pos += 1;
-                            return .pipe2;
-                        },
-                        else => return .pipe2,
-                    }
-                },
-                .ampersand => {
-                    switch (cur_char) {
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .ampersand_equal;
-                        },
-                        '&' => {
-                            tokeniser.cur_pos += 1;
-                            return .ampersand2;
-                        },
-                        else => return .ampersand,
-                    }
-                },
-                .caret => return equals_or_single(cur_char, .caret_equal, .caret),
-                .not => return equals_or_single(cur_char, .not_equal, .not),
-
-                .r_arrow => {
-                    switch (cur_char) {
-                        '>' => {
-                            state = .r_arrow2;
-                        },
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .r_arrow_equal;
-                        },
-                        else => return .r_arrow,
-                    }
-                },
-
-                .r_arrow2 => {
-                    if (cur_char == '=') {
-                        tokeniser.cur_pos += 1;
-                        return .r_arrow2_equal;
-                    } else {
-                        return .r_arrow2;
-                    }
-                },
-
-                .l_arrow => {
-                    switch (cur_char) {
-                        '<' => {
-                            state = .l_arrow2;
-                        },
-                        '=' => {
-                            tokeniser.cur_pos += 1;
-                            return .l_arrow_equal;
-                        },
-                        else => return .l_arrow,
-                    }
-                },
-
-                .l_arrow2 => {
-                    if (cur_char == '=') {
-                        tokeniser.cur_pos += 1;
-                        return .l_arrow2_equal;
-                    } else {
-                        return .l_arrow2;
-                    }
-                },
-
-                .dot => {
-                    switch (cur_char) {
-                        '.' => {
-                            tokeniser.cur_pos += 1;
-                            return .dot2;
-                        },
-                        '*' => {
-                            tokeniser.cur_pos += 1;
-                            return .dot_asterisk;
-                        },
-                        else => return .dot,
-                    }
-                },
-            }
-            tokeniser.cur_pos += 1;
-        }
-
-        // We reached the end of input without emitting a token.
-        // Use the current state to emit one if possible.
-        switch (state) {
-            .start => return error.EndOfInput,
-            .identifier_or_keyword => return .identifier,
-            .integer_unknown => return error.UnknownInteger,
-
-            .pending_integer_bin => return error.InvalidIntegerLit,
-            .pending_integer_oct => return error.InvalidIntegerLit,
-            .pending_integer_hex => return error.InvalidIntegerLit,
-
-            .integer_bin => return .integer_bin,
-            .integer_oct => return .integer_oct,
-            .integer_hex => return .integer_hex,
-            .integer_dec => return .integer_dec,
-
-            .equal => return .equal,
-            .plus => return .plus,
-            .minus => return .minus,
-            .asterisk => return .asterisk,
-            .slash => return .slash,
-            .slash2 => return error.EndOfInput,
-            .pipe => return .pipe,
-            .ampersand => return .ampersand,
-            .caret => return .caret,
-            .not => return .not,
-            .l_arrow => return .l_arrow,
-            .r_arrow => return .r_arrow,
-            .l_arrow2 => return .l_arrow2,
-            .r_arrow2 => return .r_arrow2,
-            .dot => return .dot,
-        }
-    }
 
     pub fn next_token(tokeniser: *Tokeniser) !TokenFull {
         if (tokeniser.cur_token) |token| {
@@ -429,12 +123,9 @@ pub const Tokeniser = struct {
             return error.EndOfInput;
         }
 
-        var tok_type = try tokeniser.get_token_type();
-        return TokenFull{
-            .type = tok_type,
-            .start = tokeniser.cur_tok_start,
-            .end = tokeniser.cur_pos,
-        };
+        const tok = try tokenise(tokeniser.src, tokeniser.cur_pos);
+        tokeniser.cur_pos = tok.end;
+        return tok;
     }
 
     pub fn peek_token(tokeniser: *Tokeniser) !TokenFull {
@@ -446,14 +137,353 @@ pub const Tokeniser = struct {
             return error.EndOfInput;
         }
 
-        var tok_type = try tokeniser.get_token_type();
-        const token = TokenFull{
-            .type = tok_type,
-            .start = tokeniser.cur_tok_start,
-            .end = tokeniser.cur_pos,
-        };
-
-        tokeniser.cur_token = token;
-        return token;
+        const tok = try tokenise(tokeniser.src, tokeniser.cur_pos);
+        tokeniser.cur_token = tok;
+        return tok;
     }
 };
+
+fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
+    var state: TokenState = .start;
+
+    var start = start_from;
+    var pos = start;
+
+    while (pos < src.len) {
+        var cur_char = src[pos];
+
+        // print("State is {any}, char is {u}\n", .{ state, cur_char });
+
+        switch (state) {
+            .start => switch (cur_char) {
+                'A'...'Z', 'a'...'z' => state = .identifier_or_keyword,
+                '0' => {
+                    state = .integer_unknown;
+                },
+                '1'...'9' => {
+                    state = .integer_dec;
+                },
+
+                '=' => state = .equal,
+                '+' => state = .plus,
+                '-' => state = .minus,
+                '*' => state = .asterisk,
+                '/' => state = .slash,
+                '|' => state = .pipe,
+                '&' => state = .ampersand,
+                '^' => state = .caret,
+                '!' => state = .not,
+                '<' => state = .l_arrow,
+                '>' => state = .r_arrow,
+                '.' => state = .dot,
+
+                '(' => {
+                    pos += 1;
+                    return TokenFull.init(.l_paren, start, pos);
+                },
+                ')' => {
+                    pos += 1;
+                    return TokenFull.init(.r_paren, start, pos);
+                },
+                '[' => {
+                    pos += 1;
+                    return TokenFull.init(.l_bracket, start, pos);
+                },
+                ']' => {
+                    pos += 1;
+                    return TokenFull.init(.r_bracket, start, pos);
+                },
+                '{' => {
+                    pos += 1;
+                    return TokenFull.init(.l_brace, start, pos);
+                },
+                '}' => {
+                    pos += 1;
+                    return TokenFull.init(.r_brace, start, pos);
+                },
+                ',' => {
+                    pos += 1;
+                    return TokenFull.init(.comma, start, pos);
+                },
+                ':' => {
+                    pos += 1;
+                    return TokenFull.init(.colon, start, pos);
+                },
+                ';' => {
+                    pos += 1;
+                    return TokenFull.init(.semicolon, start, pos);
+                },
+
+                '\n', '\t', ' ' => {
+                    while (pos < src.len and (cur_char == ' ' or cur_char == '\t')) {
+                        pos += 1;
+                        cur_char = src[pos];
+                    }
+                    start = pos;
+                    continue;
+                },
+                else => @panic("Start state not handled"),
+            },
+            .identifier_or_keyword => {
+                switch (cur_char) {
+                    'A'...'Z', 'a'...'z', '0'...'9', '_' => {},
+                    else => {
+                        // tok.type = .identifier;
+                        // TODO: Check if keyword
+                        const id_str = src[start..pos];
+
+                        if (std.mem.eql(u8, id_str, "fn")) {
+                            return TokenFull.init(.keyword_fn, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "and")) {
+                            return TokenFull.init(.keyword_and, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "or")) {
+                            return TokenFull.init(.keyword_or, start, pos);
+                        }
+
+                        return TokenFull.init(.identifier, start, pos);
+                    },
+                }
+            },
+
+            .integer_unknown => {
+                switch (cur_char) {
+                    'b' => {
+                        state = .pending_integer_bin;
+                    },
+                    'o' => {
+                        state = .pending_integer_oct;
+                    },
+                    'x' => {
+                        state = .pending_integer_hex;
+                    },
+                    else => return error.InvalidIntegerLit,
+                }
+            },
+            .integer_dec => switch (cur_char) {
+                '0'...'9', '_' => {},
+                else => return TokenFull.init(.integer_dec, start, pos),
+            },
+
+            .pending_integer_bin => switch (cur_char) {
+                '0', '1' => {
+                    state = .integer_bin;
+                    start = pos;
+                },
+                else => return error.InvalidIntegerLit,
+            },
+            .pending_integer_oct => switch (cur_char) {
+                '0'...'7' => {
+                    state = .integer_oct;
+                    start = pos;
+                },
+                else => return error.InvalidIntegerLit,
+            },
+            .pending_integer_hex => switch (cur_char) {
+                '0'...'9', 'a'...'f', 'A'...'F' => {
+                    state = .integer_hex;
+                    start = pos;
+                },
+                else => return error.InvalidIntegerLit,
+            },
+
+            .integer_bin => switch (cur_char) {
+                '0', '1', '_' => {},
+                else => return TokenFull.init(.integer_bin, start, pos),
+            },
+            .integer_oct => switch (cur_char) {
+                '0'...'7', '_' => {},
+                else => return TokenFull.init(.integer_oct, start, pos),
+            },
+            .integer_hex => switch (cur_char) {
+                '0'...'9', 'a'...'f', 'A'...'F', '_' => {},
+                else => return TokenFull.init(.integer_hex, start, pos),
+            },
+
+            .equal => return TokenFull.init(equals_or_single(cur_char, .equal2, .equal), start, pos),
+            .plus => return TokenFull.init(equals_or_single(cur_char, .plus_equal, .plus), start, pos),
+            .minus => {
+                switch (cur_char) {
+                    '>' => {
+                        pos += 1;
+                        return TokenFull.init(.minus_arrow, start, pos);
+                    },
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.minus_equal, start, pos);
+                    },
+                    else => return TokenFull.init(.minus, start, pos),
+                }
+            },
+            .asterisk => return TokenFull.init(equals_or_single(cur_char, .asterisk_equal, .asterisk), start, pos),
+            .slash => {
+                switch (cur_char) {
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.slash_equal, start, pos);
+                    },
+                    '/' => {
+                        // line comment
+                        state = .slash2;
+                    },
+                    else => return TokenFull.init(.slash, start, pos),
+                }
+            },
+            .slash2 => {
+                while (pos < src.len - 1 and cur_char != '\n') {
+                    pos += 1;
+                    cur_char = src[pos];
+                }
+                start = pos;
+                state = .start;
+                continue;
+            },
+
+            .pipe => {
+                switch (cur_char) {
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.pipe_equal, start, pos);
+                    },
+                    '|' => {
+                        pos += 1;
+                        return TokenFull.init(.pipe2, start, pos);
+                    },
+                    else => return TokenFull.init(.pipe2, start, pos),
+                }
+            },
+            .ampersand => {
+                switch (cur_char) {
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.ampersand_equal, start, pos);
+                    },
+                    '&' => {
+                        pos += 1;
+                        return TokenFull.init(.ampersand2, start, pos);
+                    },
+                    else => return TokenFull.init(.ampersand, start, pos),
+                }
+            },
+            .caret => return TokenFull.init(equals_or_single(cur_char, .caret_equal, .caret), start, pos),
+            .not => return TokenFull.init(equals_or_single(cur_char, .not_equal, .not), start, pos),
+
+            .r_arrow => {
+                switch (cur_char) {
+                    '>' => {
+                        state = .r_arrow2;
+                    },
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.r_arrow_equal, start, pos);
+                    },
+                    else => return TokenFull.init(.r_arrow, start, pos),
+                }
+            },
+
+            .r_arrow2 => {
+                if (cur_char == '=') {
+                    pos += 1;
+                    return TokenFull.init(.r_arrow2_equal, start, pos);
+                } else {
+                    return TokenFull.init(.r_arrow2, start, pos);
+                }
+            },
+
+            .l_arrow => {
+                switch (cur_char) {
+                    '<' => {
+                        state = .l_arrow2;
+                    },
+                    '=' => {
+                        pos += 1;
+                        return TokenFull.init(.l_arrow_equal, start, pos);
+                    },
+                    else => return TokenFull.init(.l_arrow, start, pos),
+                }
+            },
+
+            .l_arrow2 => {
+                if (cur_char == '=') {
+                    pos += 1;
+                    return TokenFull.init(.l_arrow2_equal, start, pos);
+                } else {
+                    return TokenFull.init(.l_arrow2, start, pos);
+                }
+            },
+
+            .dot => {
+                switch (cur_char) {
+                    '.' => {
+                        pos += 1;
+                        return TokenFull.init(.dot2, start, pos);
+                    },
+                    '*' => {
+                        pos += 1;
+                        return TokenFull.init(.dot_asterisk, start, pos);
+                    },
+                    else => return TokenFull.init(.dot, start, pos),
+                }
+            },
+        }
+        pos += 1;
+    }
+
+    // We reached the end of input without emitting a token.
+    // Use the current state to emit one if possible.
+    switch (state) {
+        .start => return error.EndOfInput,
+        .identifier_or_keyword => return TokenFull.init(.identifier, start, pos),
+        .integer_unknown => return error.UnknownInteger,
+
+        .pending_integer_bin => return error.InvalidIntegerLit,
+        .pending_integer_oct => return error.InvalidIntegerLit,
+        .pending_integer_hex => return error.InvalidIntegerLit,
+
+        .integer_bin => return TokenFull.init(.integer_bin, start, pos),
+        .integer_oct => return TokenFull.init(.integer_oct, start, pos),
+        .integer_hex => return TokenFull.init(.integer_hex, start, pos),
+        .integer_dec => return TokenFull.init(.integer_dec, start, pos),
+
+        .equal => return TokenFull.init(.equal, start, pos),
+        .plus => return TokenFull.init(.plus, start, pos),
+        .minus => return TokenFull.init(.minus, start, pos),
+        .asterisk => return TokenFull.init(.asterisk, start, pos),
+        .slash => return TokenFull.init(.slash, start, pos),
+        .slash2 => return error.EndOfInput,
+        .pipe => return TokenFull.init(.pipe, start, pos),
+        .ampersand => return TokenFull.init(.ampersand, start, pos),
+        .caret => return TokenFull.init(.caret, start, pos),
+        .not => return TokenFull.init(.not, start, pos),
+        .l_arrow => return TokenFull.init(.l_arrow, start, pos),
+        .r_arrow => return TokenFull.init(.r_arrow, start, pos),
+        .l_arrow2 => return TokenFull.init(.l_arrow2, start, pos),
+        .r_arrow2 => return TokenFull.init(.r_arrow2, start, pos),
+        .dot => return TokenFull.init(.dot, start, pos),
+    }
+}
+
+// // Convert a token to its full format (with an end field)
+// // by trimming off trailing whitespace.
+// fn token_to_full(token: Token, src: []const u8) TokenFull {
+//     var end_pos = token.start;
+//     var cur_char = src[end_pos];
+//     while (cur_char != ' ' and cur_char != '\t' and end_pos + 1 < src.len) {
+//         end_pos += 1;
+//         cur_char = src[end_pos];
+//     }
+//     return TokenFull{
+//         .type = token.type,
+//         .start = token.start,
+//         .end = end_pos,
+//     };
+// }
+
+pub fn token_to_str(token: Token, src: []const u8) []const u8 {
+    const full_tok = tokenise(src, token.start) catch unreachable;
+    return src[full_tok.start..full_tok.end];
+}
+
+// fn tokenise(src: []const u8, start_pos: SourceIndex) TokenFull {
+//     _ = start_pos;
+//     _ = src;
+// }
