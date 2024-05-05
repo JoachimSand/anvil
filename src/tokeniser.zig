@@ -152,7 +152,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
     while (pos < src.len) {
         var cur_char = src[pos];
 
-        // print("State is {any}, char is {u}\n", .{ state, cur_char });
+        // print("State is {any}, char is '{u}'\n", .{ state, cur_char });
 
         switch (state) {
             .start => switch (cur_char) {
@@ -215,7 +215,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                 },
 
                 '\n', '\t', ' ' => {
-                    while (pos < src.len and (cur_char == ' ' or cur_char == '\t')) {
+                    while (pos + 1 < src.len and (cur_char == ' ' or cur_char == '\t' or cur_char == '\n')) {
                         pos += 1;
                         cur_char = src[pos];
                     }
