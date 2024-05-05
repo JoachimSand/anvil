@@ -210,6 +210,19 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
         switch (next_tok.type) {
             .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
             .l_brace => try p.scratch.append(try parse_block(p)),
+            // TODO: Variable-only keywords here can be used to start parsing for
+            // a variable declaration unconditionally.
+            .identifier => {
+                const id_tok = try p.next_token();
+                const maybe_colon = try p.peek_token();
+                if (maybe_colon.type == .colon) {
+                    const var_decl = try parse_var_decl_w_id(p, id_tok);
+                    try p.scratch.append(var_decl);
+                } else {
+                    return error.Unimplemented;
+                }
+            },
+
             else => return error.Unimplemented,
         }
 
@@ -268,8 +281,13 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
 //   <- Identifier ":" Type ";"
 //   / Identifier ":" "=" Expr ";"
 //   / Identifier ":" Type "=" Expr ";"
+
 fn parse_var_decl(p: *Parser) ParseError!Node.Index {
-    const id_tok = try p.next_token();
+    const id_tok = p.expect_token(.identifier);
+    return parse_var_decl_w_id(p, id_tok);
+}
+
+fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.Index {
     const colon_tok = try p.next_token();
 
     if (id_tok.type != .identifier or colon_tok.type != .colon) {
@@ -290,8 +308,14 @@ fn parse_var_decl(p: *Parser) ParseError!Node.Index {
         return try p.append_node(node);
     }
 
+    var a: i32 = 1;
+    var b: i32 = 2;
+    if (equal_tok.type == .identifier) a else b = 3;
+
     return error.Unimplemented;
 }
+
+// fn parse_assigment()
 
 // PrimaryExpr
 //   <- "(" Expr ")"
