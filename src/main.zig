@@ -16,26 +16,6 @@ const unicode = std.unicode;
 // Tag takes up 1 byte, meaning we have at most 3 available
 // 4 byte fields.
 const Node = union(enum) {
-    // identifier ":" type
-    parameter: struct {
-        identifier: Parser.TokenIndex,
-        param_type: Index,
-    },
-
-    var_decl_type: struct {
-        identifier: Parser.TokenIndex,
-        decl_type: Index,
-    },
-    var_decl_expr: struct {
-        identifier: Parser.TokenIndex,
-        decl_expr: u32,
-    },
-    var_decl_full: struct {
-        identifier: Parser.TokenIndex,
-        decl_type: Index,
-        decl_expr: Index,
-    },
-
     // No params, no ret type, no dependencies
     fn_decl: struct {
         identifier: Parser.TokenIndex,
@@ -55,9 +35,35 @@ const Node = union(enum) {
         block: Index,
     },
 
+    parameter: struct {
+        identifier: Parser.TokenIndex,
+        param_type: Index,
+    },
+
+    var_decl_type: struct {
+        identifier: Parser.TokenIndex,
+        decl_type: Index,
+    },
+    var_decl_expr: struct {
+        identifier: Parser.TokenIndex,
+        decl_expr: u32,
+    },
+    var_decl_full: struct {
+        identifier: Parser.TokenIndex,
+        decl_type: Index,
+        decl_expr: Index,
+    },
+
+    assignment: struct {
+        token: Parser.TokenIndex,
+        target: Index,
+        expr: Index,
+    },
+
     block: struct {
         start_brace: Parser.TokenIndex,
-        statements: NodeIndexSlice,
+        statements_start: Index,
+        statements_end: Index,
     },
     block_one: struct {
         start_brace: Parser.TokenIndex,
@@ -69,14 +75,43 @@ const Node = union(enum) {
 
     binary_exp: BinaryExp,
 
+    prefix_exp: Prefix,
+
+    fn_call: struct {
+        args_start: Index,
+        args_end: Index,
+        start_paren: Parser.TokenIndex,
+    },
+    fn_call_one: struct {
+        start_paren: Parser.TokenIndex,
+        arg: Index,
+    },
+    fn_call_empty: struct {
+        start_paren: Parser.TokenIndex,
+    },
+    deref: struct {
+        target: Index,
+        token: Parser.TokenInfo,
+    },
+    // field_access: struct {
+    //     token: Parser.TokenIndex,
+    //     target: Index,
+    //     field_name: Parser.TokenIndex,
+    // },
+    identifier: Parser.TokenIndex,
     integer_lit: Parser.TokenIndex,
 
     const Index = u32;
     const ExtraIndex = u32;
 
+    const Prefix = struct {
+        target: Index,
+        token: Parser.TokenInfo,
+    };
+
     const FnDeclFull = packed struct {
         identifier: Parser.TokenIndex,
-        params: NodeIndexSlice,
+        params: IndexSlice,
         dependencies: Index,
         ret_type: Index,
         block: Index,
@@ -85,14 +120,14 @@ const Node = union(enum) {
     // Multiple parameters
     const FnDeclParams = packed struct {
         identifier: Parser.TokenIndex,
-        params: NodeIndexSlice,
+        params: IndexSlice,
         block: Index,
     };
 
     // Multiple parameters and specified return type
     const FnDeclParamsType = packed struct {
         identifier: Parser.TokenIndex,
-        params: NodeIndexSlice,
+        params: IndexSlice,
         ret_type: Index,
         block: Index,
     };
@@ -101,12 +136,12 @@ const Node = union(enum) {
     // TODO: Disallow this in the grammar? Seems useless...
     const FnDeclDepsType = packed struct {
         identifier: Parser.TokenIndex,
-        params: NodeIndexSlice,
+        params: IndexSlice,
         ret_type: Index,
         block: Index,
     };
 
-    const NodeIndexSlice = packed struct {
+    const IndexSlice = packed struct {
         start: ExtraIndex,
         end: ExtraIndex,
     };
@@ -193,67 +228,6 @@ const Parser = struct {
         return token_to_str(p.tokens.get(tok_index), p.src);
     }
 };
-// Block <- "{" Statement* "}"
-
-// Expressions evaluate to a value
-// Statements may evaluate to a control-flow effect
-// Statement
-//   <- Decl / Assignment / Block / IfStatement
-
-fn parse_block(p: *Parser) ParseError!Node.Index {
-    const l_brace = try p.expect_token(.l_brace);
-
-    // TODO: Better error reporting regardings brace like in ember
-    var next_tok = try p.peek_token();
-    var statements: ?[]Node.Index = null;
-    while (next_tok.type != .r_brace) {
-        switch (next_tok.type) {
-            .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
-            .l_brace => try p.scratch.append(try parse_block(p)),
-            // TODO: Variable-only keywords here can be used to start parsing for
-            // a variable declaration unconditionally.
-            .identifier => {
-                const id_tok = try p.next_token();
-                const maybe_colon = try p.peek_token();
-                if (maybe_colon.type == .colon) {
-                    const var_decl = try parse_var_decl_w_id(p, id_tok);
-                    try p.scratch.append(var_decl);
-                } else {
-                    return error.Unimplemented;
-                }
-            },
-
-            else => return error.Unimplemented,
-        }
-
-        if (statements) |*s| {
-            s.len += 1;
-        } else {
-            statements = p.scratch.items[p.scratch.items.len - 1 ..];
-        }
-
-        next_tok = try p.peek_token();
-
-        // return error.Unimplemented;
-    }
-    _ = try p.next_token();
-
-    var block_node: Node = undefined;
-    if (statements) |*s| {
-        if (s.len == 1) {
-            block_node = Node{ .block_one = .{ .start_brace = l_brace.index, .statement = s.*[0] } };
-        } else {
-            const start: u32 = @intCast(p.extra.items.len);
-            try p.extra.appendSlice(s.*);
-            const end: u32 = @intCast(p.extra.items.len);
-            block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements = .{ .start = start, .end = end } } };
-        }
-    } else {
-        block_node = Node{ .empty_block = .{ .start_brace = l_brace.index } };
-    }
-
-    return p.append_node(block_node);
-}
 
 // Decl
 //   <- VarDecl
@@ -308,30 +282,149 @@ fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.Ind
         return try p.append_node(node);
     }
 
-    var a: i32 = 1;
-    var b: i32 = 2;
-    if (equal_tok.type == .identifier) a else b = 3;
-
     return error.Unimplemented;
 }
 
-// fn parse_assigment()
+// Block <- "{" Statement* "}"
+
+// Expressions evaluate to a value
+// Statements may evaluate to a control-flow effect
+// Statement
+//   <- Decl / Assignment / Block / IfStatement
+
+fn parse_block(p: *Parser) ParseError!Node.Index {
+    const l_brace = try p.expect_token(.l_brace);
+
+    // TODO: Better error reporting regardings brace like in ember
+    var next_tok = try p.peek_token();
+    var statements: ?[]Node.Index = null;
+    while (next_tok.type != .r_brace) {
+        switch (next_tok.type) {
+            .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
+            .l_brace => try p.scratch.append(try parse_block(p)),
+            // TODO: Variable-only keywords here can be used to start parsing for
+            // a variable declaration unconditionally.
+            .identifier => {
+                const id_tok = try p.next_token();
+                const maybe_colon = try p.peek_token();
+                if (maybe_colon.type == .colon) {
+                    const var_decl = try parse_var_decl_w_id(p, id_tok);
+                    try p.scratch.append(var_decl);
+                } else {
+                    const assignment = try parse_assigment_w_id(p, id_tok);
+                    try p.scratch.append(assignment);
+                }
+            },
+
+            else => return error.Unimplemented,
+        }
+
+        if (statements) |*s| {
+            s.len += 1;
+        } else {
+            statements = p.scratch.items[p.scratch.items.len - 1 ..];
+        }
+
+        next_tok = try p.peek_token();
+
+        // return error.Unimplemented;
+    }
+    _ = try p.next_token();
+
+    var block_node: Node = undefined;
+    if (statements) |*s| {
+        if (s.len == 1) {
+            block_node = Node{ .block_one = .{ .start_brace = l_brace.index, .statement = s.*[0] } };
+        } else {
+            const start: u32 = @intCast(p.extra.items.len);
+            try p.extra.appendSlice(s.*);
+            const end: u32 = @intCast(p.extra.items.len);
+            block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = start, .statements_end = end } };
+        }
+
+        p.scratch.items.len -= s.len;
+    } else {
+        block_node = Node{ .empty_block = .{ .start_brace = l_brace.index } };
+    }
+
+    return p.append_node(block_node);
+}
+
+// FieldAccess <- "." Identifier
+// Dereference <- ".*"
+// Indexing <- "[" Expr (".." Expr?)? "]"
+
+// Assignment <- PostfixExpr AssignmentOp Expr ";"
+// AssignmentOp <- "=" / "+=" / "-=" / "*=" / "/=" / "|=" / "&=" / "^=" / "<<=" / ">>="
+fn parse_assigment_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.Index {
+    const id_node = Node{ .integer_lit = id_tok.index };
+    const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
+
+    const assignment_tok = try p.next_token();
+    switch (assignment_tok.type) {
+        .equal, .plus_equal, .minus_equal, .slash_equal, .pipe_equal, .ampersand_equal, .caret_equal, .l_arrow2_equal, .r_arrow2_equal => {
+            const expr = try parse_expr(p, 0);
+            _ = try p.expect_token(.semicolon);
+            const node = Node{ .assignment = .{ .token = assignment_tok.index, .target = target, .expr = expr } };
+            return p.append_node(node);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+// PrefixOps = ("&" / "-" / "!")
+// PrefixExpr <- PrefixOps* PostfixExpr
+
+// TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
+fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
+    const peek_tok = try p.peek_token();
+
+    var prefix_node = switch (peek_tok.type) {
+        .ampersand, .minus, .not => Node{ .prefix_exp = .{ .token = try p.next_token(), .target = try parse_prefix_expr(p) } },
+        else => return parse_postfix_expr(p),
+    };
+
+    return p.append_node(prefix_node);
+}
+
+// FunctionCall <- "(" (Expr ",")* Expr? ")"
+// FieldAccess <- "." Identifier
+// Dereference <- ".*"
+// Indexing <- "[" Expr (".." Expr?)? "]"
+// PostfixOps <- ( FunctionCall / FieldAccess / Dereference / Indexing )
+// PostfixExpr <- PrimaryExpr PostfixOps*
 
 // PrimaryExpr
 //   <- "(" Expr ")"
 //   / INTEGER
 //   / IfExpr / ContainerLiteral / ContainerDefinition
-fn parse_primary_expr(p: *Parser) ParseError!Node.Index {
-    const primary_tok = try p.next_token();
 
-    switch (primary_tok.type) {
-        .integer_bin, .integer_oct, .integer_hex, .integer_dec => {
-            const node: Node = Node{ .integer_lit = primary_tok.index };
-            return try p.append_node(node);
-        },
+fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
+    // First, parse a primary expr
+    const tok = try p.next_token();
+    var primary = switch (tok.type) {
+        .integer_bin, .integer_oct, .integer_hex, .integer_dec => try p.append_node(.{ .integer_lit = tok.index }),
+        .identifier => try p.append_node(Node{ .identifier = tok.index }),
         else => return error.Unimplemented,
+    };
+
+    return parse_postfix_expr_w_prim(p, primary);
+}
+
+fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseError!Node.Index {
+    // Parse postfix
+    var primary = pre_parsed_primary;
+    while (true) {
+        const peek = try p.peek_token();
+        switch (peek.type) {
+            .dot_asterisk => {
+                const deref_node = Node{ .deref = .{ .token = try p.next_token(), .target = primary } };
+                primary = try p.append_node(deref_node);
+            },
+            .l_bracket, .l_paren, .dot => return error.Unimplemented,
+            else => return primary,
+        }
     }
-    return error.Unimplemented;
 }
 
 // 1: BoolOrExpr <- BoolAndExpr ("or" BoolAndExpr)*
@@ -357,7 +450,7 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
 fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     // Parse an "atom"/left hand side of expression
     // TODO: Add pre-fix and post-fix parsing
-    var lhs = try parse_primary_expr(p);
+    var lhs = try parse_prefix_expr(p);
     var maybe_op = try p.peek_token();
 
     var cur_prec = start_prec;
@@ -396,17 +489,10 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
     defer prefix.items.len -= pre_str.len;
 
     switch (p.nodes.items[cur_node]) {
-        // Base cases
-        .integer_lit => |tok_index| {
-            const str = p.get_tok_str(tok_index);
-            print("Integer literal {s} \n", .{str});
-        },
-
-        .binary_exp => |bin_exp| {
-            const op_str = p.get_tok_str(bin_exp.op_tok);
-            print("{s}\n", .{op_str});
-            try print_ast(p, prefix, false, bin_exp.lhs);
-            try print_ast(p, prefix, true, bin_exp.rhs);
+        .fn_decl => |decl| {
+            const id_str = p.get_tok_str(decl.identifier);
+            print("fn {s} \n", .{id_str});
+            try print_ast(p, prefix, true, decl.block);
         },
 
         .var_decl_expr => |decl| {
@@ -415,10 +501,11 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast(p, prefix, true, decl.decl_expr);
         },
 
-        .fn_decl => |decl| {
-            const id_str = p.get_tok_str(decl.identifier);
-            print("fn {s} \n", .{id_str});
-            try print_ast(p, prefix, true, decl.block);
+        .assignment => |assignment| {
+            const str = p.get_tok_str(assignment.token);
+            print("Assignment {s} \n", .{str});
+            try print_ast(p, prefix, false, assignment.target);
+            try print_ast(p, prefix, true, assignment.expr);
         },
 
         .empty_block => {
@@ -433,14 +520,38 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
         .block => |block| {
             print("Block\n", .{});
 
-            const statements = p.extra.items[block.statements.start..block.statements.end];
+            const statements = p.extra.items[block.statements_start..block.statements_end];
             for (statements, 0..) |statement, index| {
-                if (index == block.statements.end - 1) {
+                if (index == block.statements_end - 1) {
                     try print_ast(p, prefix, true, statement);
                 } else {
                     try print_ast(p, prefix, false, statement);
                 }
             }
+        },
+
+        .binary_exp => |bin_exp| {
+            const op_str = p.get_tok_str(bin_exp.op_tok);
+            print("{s}\n", .{op_str});
+            try print_ast(p, prefix, false, bin_exp.lhs);
+            try print_ast(p, prefix, true, bin_exp.rhs);
+        },
+
+        .prefix_exp => |prefix_exp| {
+            const prefix_str = p.get_tok_str(prefix_exp.token.index);
+            print("{s} \n", .{prefix_str});
+            try print_ast(p, prefix, true, prefix_exp.target);
+        },
+
+        .deref => |deref| {
+            const str = p.get_tok_str(deref.token.index);
+            print("{s} \n", .{str});
+            try print_ast(p, prefix, true, deref.target);
+        },
+
+        .integer_lit, .identifier => |tok_index| {
+            const str = p.get_tok_str(tok_index);
+            print("{s} \n", .{str});
         },
 
         else => return error.Unimplemented,

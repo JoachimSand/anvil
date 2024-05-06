@@ -1,5 +1,7 @@
 fn foo(){
-	fn bar(){}
-	fn foobar(){}
-	hello := 2+3;
+	hello := &2.* +3;
+	a = b;
+	{
+		c = 4*5;
+	}
 }
