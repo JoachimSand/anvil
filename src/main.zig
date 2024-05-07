@@ -54,6 +54,17 @@ const Node = union(enum) {
         decl_expr: Index,
     },
 
+    // TODO: For future error reporting we would like to store the location of the if_token
+    if_statement: struct {
+        condition: Index,
+        block: Index,
+    },
+    if_else_statement: struct {
+        condition: Index,
+        block: Index,
+        else_block: Index,
+    },
+
     assignment: struct {
         token: Parser.TokenIndex,
         target: Index,
@@ -76,6 +87,16 @@ const Node = union(enum) {
     binary_exp: BinaryExp,
 
     prefix_exp: Prefix,
+
+    // Consider creating an explicit struct type for references
+    ref: struct {
+        ref_tok: Parser.TokenInfo,
+        target: Index,
+    },
+    ref_mut: struct {
+        ref_tok: Parser.TokenInfo,
+        target: Index,
+    },
 
     fn_call: struct {
         args_start: Index,
@@ -316,6 +337,60 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
                 }
             },
 
+            .keyword_if => {
+
+                // IfStatement <- "if" Expr Block ("else" (IfStatement / Block))?
+                var prev_else_index: ?Node.Index = null;
+                while (true) {
+                    const if_tok = try p.next_token();
+                    _ = if_tok;
+                    const expr = try parse_expr(p, 0);
+                    const block = try parse_block(p);
+
+                    // Potential else case
+                    var peek = try p.peek_token();
+                    if (peek.type == .keyword_else) {
+                        _ = try p.next_token();
+
+                        // Create an if-else node with the else case to be set as the subsequent block
+                        // in the else case, and alternatively by the next it
+                        const node = Node{ .if_else_statement = .{ .condition = expr, .block = block, .else_block = undefined } };
+                        const index = try p.append_node(node);
+                        try p.scratch.append(index);
+
+                        if (prev_else_index) |else_index| {
+                            p.nodes.items[else_index].if_else_statement.else_block = index;
+                        }
+
+                        peek = try p.peek_token();
+                        switch (peek.type) {
+                            .l_brace => {
+                                // final else
+                                const else_block = try parse_block(p);
+                                p.nodes.items[index].if_else_statement.else_block = else_block;
+                                break;
+                            },
+                            .keyword_if => {
+                                // else-if. The node created on this iteration will have it's destination set by the next
+                                // iteration.
+                                prev_else_index = index;
+                            },
+                            else => return error.UnexpectedToken,
+                        }
+                    } else {
+                        const node = Node{ .if_statement = .{ .condition = expr, .block = block } };
+                        const index = try p.append_node(node);
+
+                        if (prev_else_index) |else_index| {
+                            p.nodes.items[else_index].if_else_statement.else_block = index;
+                        }
+
+                        try p.scratch.append(index);
+                        break;
+                    }
+                }
+            },
+
             else => return error.Unimplemented,
         }
 
@@ -372,11 +447,64 @@ fn parse_assigment_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.In
     }
 }
 
-// PrefixOps = ("&" / "-" / "!")
+const GenericParseFn = *const fn (p: *Parser) ParseError!Node.Index;
+
+inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) ParseError!Node.Index {
+    const ampersand = try p.next_token();
+    if (ampersand.type != .ampersand and ampersand.type != .ampersand2) {
+        return error.UnexpectedToken;
+    }
+
+    const maybe_cap = try p.peek_token();
+    var prefix_node: Node = undefined;
+    switch (maybe_cap.type) {
+        .keyword_mut => {
+            _ = try p.next_token();
+            prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
+        },
+        else => {
+            prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
+        },
+    }
+
+    if (ampersand.type == .ampersand2) {
+
+        // Node for the innermost reference
+        const ref_inner_index = try p.append_node(prefix_node);
+        // Node for the outermost reference
+        prefix_node = Node{ .ref = .{ .ref_tok = ampersand, .target = ref_inner_index } };
+    }
+
+    return p.append_node(prefix_node);
+}
+
+// ReferenceOp <- "&" "mut"?
+// PrefixOps <- (ReferenceOp / "-" / "!")
 // PrefixExpr <- PrefixOps* PostfixExpr
 
 // TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
-fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
+fn parse_prefix_expr(
+    p: *Parser,
+) ParseError!Node.Index {
+    const peek_tok = try p.peek_token();
+
+    var prefix_node: Node = undefined;
+
+    switch (peek_tok.type) {
+        .minus, .not => {
+            const token = p.next_token() catch undefined;
+            const prefix_expr = try parse_prefix_expr(p);
+            prefix_node = Node{ .prefix_exp = .{ .token = token, .target = prefix_expr } };
+            return p.append_node(prefix_node);
+        },
+        .ampersand, .ampersand2 => return parse_reference(p, parse_prefix_expr),
+        else => return parse_postfix_expr(p),
+    }
+}
+
+// TypePrefixOps = "&" / "[" "]"
+// TypeExpr <- TypePrefixOps* PostfixExpr
+fn parse_type_expr(p: *Parser) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
     var prefix_node = switch (peek_tok.type) {
@@ -508,6 +636,19 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast(p, prefix, true, assignment.expr);
         },
 
+        .if_statement => |statement| {
+            print("if\n", .{});
+            try print_ast(p, prefix, false, statement.condition);
+            try print_ast(p, prefix, true, statement.block);
+        },
+
+        .if_else_statement => |statement| {
+            print("if else\n", .{});
+            try print_ast(p, prefix, false, statement.condition);
+            try print_ast(p, prefix, false, statement.block);
+            try print_ast(p, prefix, true, statement.else_block);
+        },
+
         .empty_block => {
             print("Empty block\n", .{});
         },
@@ -541,6 +682,14 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             const prefix_str = p.get_tok_str(prefix_exp.token.index);
             print("{s} \n", .{prefix_str});
             try print_ast(p, prefix, true, prefix_exp.target);
+        },
+        .ref => |ref| {
+            print("&\n", .{});
+            try print_ast(p, prefix, true, ref.target);
+        },
+        .ref_mut => |ref| {
+            print("&mut\n", .{});
+            try print_ast(p, prefix, true, ref.target);
         },
 
         .deref => |deref| {

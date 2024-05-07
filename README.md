@@ -17,6 +17,5 @@ A WIP compiler for the anvil language.
 -function calls
 -array indexing
 -container definition/literals
--if expressions
 -while loops
-
+-double non-whitespaced references &&

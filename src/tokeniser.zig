@@ -51,6 +51,9 @@ pub const TokenType = enum {
     semicolon, // ";"
 
     keyword_fn,
+    keyword_if,
+    keyword_mut,
+    keyword_else,
     keyword_or,
     keyword_and,
 };
@@ -236,12 +239,22 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                         // TODO: Check if keyword
                         const id_str = src[start..pos];
 
+                        // TODO: Should this be string interned?
+                        // I suspect not, since the length difference will often cause
+                        // an early return, but with enough keywords this may become
+                        // a bottleneck.
                         if (std.mem.eql(u8, id_str, "fn")) {
                             return TokenFull.init(.keyword_fn, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "and")) {
-                            return TokenFull.init(.keyword_and, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "if")) {
+                            return TokenFull.init(.keyword_if, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "else")) {
+                            return TokenFull.init(.keyword_else, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "mut")) {
+                            return TokenFull.init(.keyword_mut, start, pos);
                         } else if (std.mem.eql(u8, id_str, "or")) {
                             return TokenFull.init(.keyword_or, start, pos);
+                        } else if (std.mem.eql(u8, id_str, "and")) {
+                            return TokenFull.init(.keyword_and, start, pos);
                         }
 
                         return TokenFull.init(.identifier, start, pos);
