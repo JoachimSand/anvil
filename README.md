@@ -3,7 +3,6 @@ A WIP compiler for the anvil language.
 
 ## Todo
 ### Standard
--types
 -var. decl keywords e.g. mut
 -while-loops
 -for-loops
@@ -12,10 +11,8 @@ A WIP compiler for the anvil language.
 -dependencies
 
 ### Parser
--types
 -parameters
 -function calls
 -array indexing
 -container definition/literals
 -while loops
--double non-whitespaced references &&

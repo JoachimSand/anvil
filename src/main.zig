@@ -9,6 +9,7 @@ const TokenType = tokeniser_mod.TokenType;
 // const SourceIndex = tokeniser_mod.SourceIndex;
 const token_to_str = tokeniser_mod.token_to_str;
 
+const assert = std.debug.assert;
 const unicode = std.unicode;
 
 // AST node and its associated data.
@@ -16,29 +17,19 @@ const unicode = std.unicode;
 // Tag takes up 1 byte, meaning we have at most 3 available
 // 4 byte fields.
 const Node = union(enum) {
-    // No params, no ret type, no dependencies
-    fn_decl: struct {
-        identifier: Parser.TokenIndex,
-        block: Index,
-    },
     // Specified return type, no parameters/deps
-    fn_decl_type: struct {
+    fn_decl: struct {
         identifier: Parser.TokenIndex,
         ret_type: Index,
         block: Index,
     },
 
-    // Single param, no return type/deps
-    fn_decl_param: struct {
-        identifier: Parser.TokenIndex,
-        param: Index,
-        block: Index,
-    },
+    // Multiple params
+    // Index to FnDeclParams
+    fn_decl_params: ExtraIndex,
 
-    parameter: struct {
-        identifier: Parser.TokenIndex,
-        param_type: Index,
-    },
+    // Index to FnDeclFull
+    fn_decl_full: ExtraIndex,
 
     var_decl_type: struct {
         identifier: Parser.TokenIndex,
@@ -130,25 +121,19 @@ const Node = union(enum) {
         token: Parser.TokenInfo,
     };
 
-    const FnDeclFull = packed struct {
+    // Multiple parameters
+    const FnDeclParams = packed struct {
         identifier: Parser.TokenIndex,
-        params: IndexSlice,
-        dependencies: Index,
+        params_start: ExtraIndex,
+        params_end: ExtraIndex,
         ret_type: Index,
         block: Index,
     };
 
-    // Multiple parameters
-    const FnDeclParams = packed struct {
+    const FnDeclFull = packed struct {
         identifier: Parser.TokenIndex,
         params: IndexSlice,
-        block: Index,
-    };
-
-    // Multiple parameters and specified return type
-    const FnDeclParamsType = packed struct {
-        identifier: Parser.TokenIndex,
-        params: IndexSlice,
+        dependencies: Index,
         ret_type: Index,
         block: Index,
     };
@@ -177,6 +162,7 @@ const Node = union(enum) {
 const ParseSpecificError = error{
     UnexpectedToken,
     EarlyTermination,
+    ParamInit,
     Unimplemented,
 };
 
@@ -189,6 +175,10 @@ const Parser = struct {
     tokens: TokenList,
     cur_token: TokenIndex = 0,
 
+    // TODO: Make this a memory allocator instead.
+    // Would need to figure out how to neatly store
+    // pointers to arrays in Node for this to work.
+    // Since pointers are 64 bit, this would be tough.
     extra: std.ArrayList(u32),
     // Used for scratch allocations e.g. indeces for each statement in a block.
     // Scratch allocations must be freed after use, in effect making this a LIFO queue.
@@ -248,6 +238,49 @@ const Parser = struct {
     fn get_tok_str(p: *Parser, tok_index: TokenIndex) []const u8 {
         return token_to_str(p.tokens.get(tok_index), p.src);
     }
+
+    fn append_extra_struct(p: *Parser, comptime s_typ: type, s: s_typ) ParseError!Node.ExtraIndex {
+        switch (@typeInfo(s_typ)) {
+            .Struct => |s_info| {
+                const index = p.extra.items.len;
+                inline for (s_info.fields) |field| {
+                    assert(field.type == u32);
+                    const field_val = @field(s, field.name);
+                    try p.extra.append(field_val);
+                }
+                return @intCast(index);
+            },
+            else => @panic("Must supply a struct"),
+        }
+    }
+
+    fn get_extra_struct(p: *Parser, comptime s_typ: type, extra_index: Node.ExtraIndex) s_typ {
+        switch (@typeInfo(s_typ)) {
+            .Struct => |s_info| {
+                var s: s_typ = undefined;
+
+                inline for (s_info.fields, 0..) |field, offset| {
+                    assert(field.type == u32);
+
+                    const field_val = p.extra.items[extra_index + offset];
+                    @field(s, field.name) = field_val;
+                }
+                return s;
+            },
+            else => @panic("Must supply a struct"),
+        }
+    }
+
+    fn pop_scratch_to_extra(p: *Parser, count: u32) !struct { start: Node.ExtraIndex, end: Node.ExtraIndex } {
+        const elems = p.scratch.items[p.scratch.items.len - count ..];
+
+        const start: u32 = @intCast(p.extra.items.len);
+        try p.extra.appendSlice(elems);
+        const end: u32 = @intCast(p.extra.items.len);
+
+        p.scratch.items.len -= count;
+        return .{ .start = start, .end = end };
+    }
 };
 
 // Decl
@@ -258,17 +291,45 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     const id_tok = try p.expect_token(.identifier);
 
     _ = try p.expect_token(.l_paren);
-    _ = try p.expect_token(.r_paren);
+    var param_count: u16 = 0;
+    while (true) {
+        const peek = try p.peek_token();
+        switch (peek.type) {
+            // Anything that can start a var decl
+            .keyword_mut, .identifier => {
+                const param = try parse_parameter(p);
+                try p.scratch.append(param);
+                param_count += 1;
+            },
+            .r_paren => break,
+            else => return error.UnexpectedToken,
+        }
 
-    const maybe_arrow = try p.peek_token();
-
-    if (maybe_arrow.type == .minus_arrow) {
-        return error.Unimplemented;
+        const maybe_comma = try p.peek_token();
+        if (maybe_comma.type == .comma) {
+            _ = p.next_token() catch undefined;
+        } else {
+            break;
+        }
     }
 
+    _ = try p.expect_token(.r_paren);
+
+    _ = try p.expect_token(.minus_arrow);
+
+    const type_expr = try parse_type_expr(p);
     const block = try parse_block(p);
 
-    const node = Node{ .fn_decl = .{ .identifier = id_tok.index, .block = block } };
+    var node: Node = undefined;
+    if (param_count == 0) {
+        node = Node{ .fn_decl = .{ .identifier = id_tok.index, .ret_type = type_expr, .block = block } };
+    } else {
+        const params = try p.pop_scratch_to_extra(param_count);
+
+        const fn_decl_params = Node.FnDeclParams{ .identifier = id_tok.index, .ret_type = type_expr, .params_start = params.start, .params_end = params.end, .block = block };
+        const extra_index = try p.append_extra_struct(Node.FnDeclParams, fn_decl_params);
+        node = Node{ .fn_decl_params = extra_index };
+    }
     return p.append_node(node);
 }
 
@@ -278,32 +339,57 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
 //   / Identifier ":" Type "=" Expr ";"
 
 fn parse_var_decl(p: *Parser) ParseError!Node.Index {
-    const id_tok = p.expect_token(.identifier);
-    return parse_var_decl_w_id(p, id_tok);
+    const id_tok = try p.expect_token(.identifier);
+    return parse_var_decl_w_id(p, id_tok, false);
 }
 
-fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.Index {
+fn parse_parameter(p: *Parser) ParseError!Node.Index {
+    const id_tok = try p.expect_token(.identifier);
+    return parse_var_decl_w_id(p, id_tok, true);
+}
+
+fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo, comptime is_param_decl: bool) ParseError!Node.Index {
     const colon_tok = try p.next_token();
 
     if (id_tok.type != .identifier or colon_tok.type != .colon) {
         return error.UnexpectedToken;
     }
 
-    const equal_tok = try p.peek_token();
-    if (equal_tok.type != .equal) {
-        // TODO: Parse type
-        @panic("Type parsing not implement var decl.");
-    } else {
-        _ = try p.next_token();
+    var type_expr: ?Node.Index = null;
+    var expr: ?Node.Index = null;
 
-        const expr = try parse_expr(p, 0);
-        const node: Node = Node{ .var_decl_expr = .{ .identifier = id_tok.index, .decl_expr = expr } };
-        _ = try p.expect_token(.semicolon);
-
-        return try p.append_node(node);
+    var peek = try p.peek_token();
+    if (peek.type != .equal) {
+        type_expr = try parse_type_expr(p);
     }
 
-    return error.Unimplemented;
+    if (peek.type == .equal) {
+        _ = p.next_token() catch undefined;
+        expr = try parse_expr(p, 0);
+    }
+
+    var node: Node = undefined;
+    if (type_expr != null and expr != null) {
+        if (is_param_decl) {
+            return error.ParamInit;
+        }
+        node = Node{ .var_decl_full = .{ .identifier = id_tok.index, .decl_type = type_expr.?, .decl_expr = expr.? } };
+    } else if (type_expr != null) {
+        node = Node{ .var_decl_type = .{ .identifier = id_tok.index, .decl_type = type_expr.? } };
+    } else if (expr != null) {
+        if (is_param_decl) {
+            return error.ParamInit;
+        }
+        node = Node{ .var_decl_expr = .{ .identifier = id_tok.index, .decl_expr = expr.? } };
+    } else {
+        return error.EarlyTermination;
+    }
+
+    if (!is_param_decl) {
+        _ = try p.expect_token(.semicolon);
+    }
+
+    return p.append_node(node);
 }
 
 // Block <- "{" Statement* "}"
@@ -329,7 +415,7 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
                 const id_tok = try p.next_token();
                 const maybe_colon = try p.peek_token();
                 if (maybe_colon.type == .colon) {
-                    const var_decl = try parse_var_decl_w_id(p, id_tok);
+                    const var_decl = try parse_var_decl_w_id(p, id_tok, false);
                     try p.scratch.append(var_decl);
                 } else {
                     const assignment = try parse_assigment_w_id(p, id_tok);
@@ -410,14 +496,11 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
     if (statements) |*s| {
         if (s.len == 1) {
             block_node = Node{ .block_one = .{ .start_brace = l_brace.index, .statement = s.*[0] } };
+            p.scratch.items.len -= s.len;
         } else {
-            const start: u32 = @intCast(p.extra.items.len);
-            try p.extra.appendSlice(s.*);
-            const end: u32 = @intCast(p.extra.items.len);
-            block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = start, .statements_end = end } };
+            const slice = try p.pop_scratch_to_extra(@intCast(s.len));
+            block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
         }
-
-        p.scratch.items.len -= s.len;
     } else {
         block_node = Node{ .empty_block = .{ .start_brace = l_brace.index } };
     }
@@ -463,7 +546,7 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
             prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
         },
         else => {
-            prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
+            prefix_node = Node{ .ref = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
         },
     }
 
@@ -488,13 +571,11 @@ fn parse_prefix_expr(
 ) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
-    var prefix_node: Node = undefined;
-
     switch (peek_tok.type) {
         .minus, .not => {
             const token = p.next_token() catch undefined;
             const prefix_expr = try parse_prefix_expr(p);
-            prefix_node = Node{ .prefix_exp = .{ .token = token, .target = prefix_expr } };
+            const prefix_node = Node{ .prefix_exp = .{ .token = token, .target = prefix_expr } };
             return p.append_node(prefix_node);
         },
         .ampersand, .ampersand2 => return parse_reference(p, parse_prefix_expr),
@@ -507,12 +588,11 @@ fn parse_prefix_expr(
 fn parse_type_expr(p: *Parser) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
-    var prefix_node = switch (peek_tok.type) {
-        .ampersand, .minus, .not => Node{ .prefix_exp = .{ .token = try p.next_token(), .target = try parse_prefix_expr(p) } },
+    switch (peek_tok.type) {
+        .l_bracket => return error.Unimplemented,
+        .ampersand, .ampersand2 => return parse_reference(p, parse_prefix_expr),
         else => return parse_postfix_expr(p),
-    };
-
-    return p.append_node(prefix_node);
+    }
 }
 
 // FunctionCall <- "(" (Expr ",")* Expr? ")"
@@ -543,13 +623,35 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
     // Parse postfix
     var primary = pre_parsed_primary;
     while (true) {
-        const peek = try p.peek_token();
+        var peek = try p.peek_token();
         switch (peek.type) {
             .dot_asterisk => {
                 const deref_node = Node{ .deref = .{ .token = try p.next_token(), .target = primary } };
                 primary = try p.append_node(deref_node);
             },
-            .l_bracket, .l_paren, .dot => return error.Unimplemented,
+            .l_paren => {
+                _ = p.next_token() catch undefined;
+
+                var expr_count = 0;
+                while (true) {
+                    const expr = try parse_parameter(p);
+                    try p.scratch.append(expr);
+                    expr_count += 1;
+                    peek = try p.peek_token();
+
+                    const maybe_comma = try p.peek_token();
+                    if (maybe_comma.type == .comma) {
+                        _ = p.next_token() catch undefined;
+                        peek = try p.peek_token();
+                        if (peek.type == .r_paren) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            },
+            .l_bracket, .dot => return error.Unimplemented,
             else => return primary,
         }
     }
@@ -589,7 +691,6 @@ fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
         }
 
         const op_token = try p.next_token();
-        print("op: {any}\n", .{op_token});
 
         const rhs = try parse_expr(p, op_prec);
         const op_node = Node{ .binary_exp = Node.BinaryExp{ .op_tok = op_token.index, .lhs = lhs, .rhs = rhs } };
@@ -601,32 +702,71 @@ fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     return lhs;
 }
 
-fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parser.NodeIndex) !void {
-    // print("At node {any} ", .{cur_node});
+fn print_ast_prefix(prefix: *std.ArrayList(u8), is_last: bool) !usize {
     print("{s}", .{prefix.items});
-    var pre_str: []const u8 = "";
+    var indent_str: []const u8 = "";
     if (is_last) {
         print("└──", .{});
-        pre_str = "    ";
-        try prefix.appendSlice(pre_str);
+        indent_str = "    ";
+        try prefix.appendSlice(indent_str);
     } else {
         print("├──", .{});
-        pre_str = "│  ";
-        try prefix.appendSlice(pre_str);
+        indent_str = "│  ";
+        try prefix.appendSlice(indent_str);
     }
-    defer prefix.items.len -= pre_str.len;
+    return indent_str.len;
+}
 
-    switch (p.nodes.items[cur_node]) {
+fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parser.NodeIndex) !void {
+    // print("At node {any} ", .{cur_node});
+    const indent_len = try print_ast_prefix(prefix, is_last);
+    defer prefix.items.len -= indent_len;
+
+    const node = p.nodes.items[cur_node];
+    switch (node) {
         .fn_decl => |decl| {
             const id_str = p.get_tok_str(decl.identifier);
             print("fn {s} \n", .{id_str});
+            try print_ast(p, prefix, false, decl.ret_type);
             try print_ast(p, prefix, true, decl.block);
+        },
+
+        .fn_decl_params => |index| {
+            const decl = p.get_extra_struct(Node.FnDeclParams, index);
+            const id_str = p.get_tok_str(decl.identifier);
+            print("fn {s} \n", .{id_str});
+
+            const param_indent = try print_ast_prefix(prefix, false);
+            const params = p.extra.items[decl.params_start..decl.params_end];
+            print("Parameters\n", .{});
+            for (params, 0..) |param, p_index| {
+                if (p_index != params.len - 1) {
+                    try print_ast(p, prefix, false, param);
+                } else {
+                    try print_ast(p, prefix, true, param);
+                }
+            }
+            prefix.items.len -= param_indent;
+
+            try print_ast(p, prefix, false, decl.ret_type);
+            try print_ast(p, prefix, true, decl.block);
+        },
+        .var_decl_full => |decl| {
+            const id_str = p.get_tok_str(decl.identifier);
+            print("Full Var. decl for {s} \n", .{id_str});
+            try print_ast(p, prefix, false, decl.decl_type);
+            try print_ast(p, prefix, true, decl.decl_expr);
         },
 
         .var_decl_expr => |decl| {
             const id_str = p.get_tok_str(decl.identifier);
-            print("Var. decl for {s} \n", .{id_str});
+            print("Expr Var. decl for {s} \n", .{id_str});
             try print_ast(p, prefix, true, decl.decl_expr);
+        },
+        .var_decl_type => |decl| {
+            const id_str = p.get_tok_str(decl.identifier);
+            print("Type Var. decl for {s} \n", .{id_str});
+            try print_ast(p, prefix, true, decl.decl_type);
         },
 
         .assignment => |assignment| {
@@ -703,7 +843,10 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             print("{s} \n", .{str});
         },
 
-        else => return error.Unimplemented,
+        else => {
+            print("\nPrint AST not implemented for {s}\n", .{@tagName(node)});
+            return error.Unimplemented;
+        },
     }
 }
 

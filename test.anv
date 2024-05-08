@@ -1,15 +1,4 @@
-fn foo(){
+fn foo(a : i8, b : u) -> &mut&&void {
 	hello := &&mut 2.* +3;
 	a = b;
-	if a {
-		c = &mut 1;
-	} else if b {
-		if d {
-			c = 2;
-		} else {
-			c = 3;
-		}
-	} else {
-		c = 4;
-	}
 }
