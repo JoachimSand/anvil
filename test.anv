@@ -1,4 +1,4 @@
 fn foo(a : i8, b : u) -> &mut&&void {
-	hello := &&mut 2.* +3;
-	a = b;
+	a = 3;
+	b = c(1, 2, &3);
 }
