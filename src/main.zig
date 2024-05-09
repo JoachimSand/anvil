@@ -46,6 +46,7 @@ const Node = union(enum) {
     },
 
     // TODO: For future error reporting we would like to store the location of the if_token
+    // TODO: Captures
     if_statement: struct {
         condition: Index,
         block: Index,
@@ -625,11 +626,16 @@ fn parse_type_expr(p: *Parser) ParseError!Node.Index {
 fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
     // First, parse a primary expr
     const tok = try p.next_token();
-    var primary = switch (tok.type) {
-        .integer_bin, .integer_oct, .integer_hex, .integer_dec => try p.append_node(.{ .integer_lit = tok.index }),
-        .identifier => try p.append_node(Node{ .identifier = tok.index }),
+    var primary: Node.Index = undefined;
+    switch (tok.type) {
+        .l_paren => {
+            primary = try parse_expr(p, 0);
+            _ = try p.expect_token(.r_paren);
+        },
+        .integer_bin, .integer_oct, .integer_hex, .integer_dec => primary = try p.append_node(.{ .integer_lit = tok.index }),
+        .identifier => primary = try p.append_node(Node{ .identifier = tok.index }),
         else => return error.Unimplemented,
-    };
+    }
 
     return parse_postfix_expr_w_prim(p, primary);
 }
@@ -675,7 +681,7 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     },
 
                     1 => {
-                        const arg = p.extra.pop();
+                        const arg = p.scratch.pop();
                         fn_node = Node{ .fn_call_single = .{ .target = primary, .start_paren = start_paren.index, .arg = arg } };
                     },
 

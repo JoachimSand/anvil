@@ -1,4 +1,4 @@
 fn foo(a : i8, b : u) -> &mut&&void {
-	a = 3;
-	b = c(1, 2, &3);
+	a = 3*(4+5*3);
+	b = malloc(3);
 }

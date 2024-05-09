@@ -51,6 +51,8 @@ pub const TokenType = enum {
     semicolon, // ";"
 
     keyword_fn,
+    keyword_struct,
+    keyword_enum,
     keyword_if,
     keyword_mut,
     keyword_else,
@@ -109,6 +111,17 @@ pub const TokenFull: type = struct {
         return TokenFull{ .type = ttype, .start = start, .end = end };
     }
 };
+
+const KeywordMap = std.ComptimeStringMap(TokenType, .{
+    .{ "fn", .keyword_fn },
+    .{ "struct", .keyword_struct },
+    .{ "enum", .keyword_enum },
+    .{ "if", .keyword_if },
+    .{ "else", .keyword_else },
+    .{ "mut", .keyword_mut },
+    .{ "or", .keyword_or },
+    .{ "and", .keyword_and },
+});
 
 pub const Tokeniser = struct {
     src: []const u8,
@@ -239,22 +252,8 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                         // TODO: Check if keyword
                         const id_str = src[start..pos];
 
-                        // TODO: Should this be string interned?
-                        // I suspect not, since the length difference will often cause
-                        // an early return, but with enough keywords this may become
-                        // a bottleneck.
-                        if (std.mem.eql(u8, id_str, "fn")) {
-                            return TokenFull.init(.keyword_fn, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "if")) {
-                            return TokenFull.init(.keyword_if, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "else")) {
-                            return TokenFull.init(.keyword_else, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "mut")) {
-                            return TokenFull.init(.keyword_mut, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "or")) {
-                            return TokenFull.init(.keyword_or, start, pos);
-                        } else if (std.mem.eql(u8, id_str, "and")) {
-                            return TokenFull.init(.keyword_and, start, pos);
+                        if (KeywordMap.get(id_str)) |keyword| {
+                            return TokenFull.init(keyword, start, pos);
                         }
 
                         return TokenFull.init(.identifier, start, pos);
