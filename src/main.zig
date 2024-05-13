@@ -81,6 +81,19 @@ const Node = union(enum) {
         start_brace: Parser.TokenIndex,
     },
 
+    container_literal: struct {
+        target_type: Index,
+        assignments_start: Index,
+        assignments_end: Index,
+    },
+    container_literal_one: struct {
+        target_type: Index,
+        assignment: Index,
+    },
+    container_literal_empty: struct {
+        target_type: Index,
+    },
+
     binary_exp: BinaryExp,
 
     prefix_exp: Prefix,
@@ -180,6 +193,7 @@ const ParseSpecificError = error{
     UnexpectedToken,
     EarlyTermination,
     ParamInit,
+    BlockNotAllowed,
     Unimplemented,
 };
 
@@ -301,7 +315,7 @@ const Parser = struct {
         }
     }
 
-    fn pop_scratch_to_extra(p: *Parser, count: u32) !Node.IndexSlice {
+    fn pop_scratch_to_extra(p: *Parser, count: usize) !Node.IndexSlice {
         const elems = p.scratch.items[p.scratch.items.len - count ..];
 
         const start: u32 = @intCast(p.extra.items.len);
@@ -321,7 +335,7 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     const id_tok = try p.expect_token(.identifier);
 
     _ = try p.expect_token(.l_paren);
-    var param_count: u16 = 0;
+    var param_count: usize = 0;
     while (true) {
         const peek = try p.peek_token();
         switch (peek.type) {
@@ -347,7 +361,7 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
 
     _ = try p.expect_token(.minus_arrow);
 
-    const type_expr = try parse_type_expr(p);
+    const type_expr = try parse_type_expr(p, false);
     const block = try parse_block(p);
 
     var node: Node = undefined;
@@ -390,12 +404,12 @@ fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo, comptime is_param_d
 
     var peek = try p.peek_token();
     if (peek.type != .equal) {
-        type_expr = try parse_type_expr(p);
+        type_expr = try parse_type_expr(p, true);
     }
 
     if (peek.type == .equal) {
         _ = p.next_token() catch undefined;
-        expr = try parse_expr(p, 0);
+        expr = try parse_expr(p, 0, true);
     }
 
     var node: Node = undefined;
@@ -429,7 +443,7 @@ fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo, comptime is_param_d
 // Statement
 //   <- Decl / Assignment / Block / IfStatement
 
-fn parse_identifier(p: *Parser) ParseError!Node.Index {
+fn parse_identifier(p: *Parser, _: bool) ParseError!Node.Index {
     const id_tok = try p.expect_token(.identifier);
     const node = Node{ .identifier = id_tok.index };
     return p.append_node(node);
@@ -438,7 +452,7 @@ fn parse_identifier(p: *Parser) ParseError!Node.Index {
 fn parse_block(p: *Parser) ParseError!Node.Index {
     const l_brace = try p.expect_token(.l_brace);
 
-    // TODO: Better error reporting regardings brace like in ember
+    // TODO: Better error reporting regarding braces like in ember
     var next_tok = try p.peek_token();
     var statements: ?[]Node.Index = null;
     while (next_tok.type != .r_brace) {
@@ -454,7 +468,9 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
                     const var_decl = try parse_var_decl_w_id(p, id_tok, false);
                     try p.scratch.append(var_decl);
                 } else {
-                    const assignment = try parse_assigment_w_id(p, id_tok);
+                    const id_node = Node{ .integer_lit = id_tok.index };
+                    const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node), true);
+                    const assignment = try parse_assigment_w_target(p, target, true);
                     try p.scratch.append(assignment);
                 }
             },
@@ -466,7 +482,7 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
                 while (true) {
                     const if_tok = try p.next_token();
                     _ = if_tok;
-                    const expr = try parse_expr(p, 0);
+                    const expr = try parse_expr(p, 0, false);
 
                     // Possible capture
                     var peek = try p.peek_token();
@@ -475,7 +491,7 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
                     var capture: ?Node.Index = null;
                     if (peek.type == .pipe) {
                         _ = p.next_token() catch undefined;
-                        capture = try parse_reference(p, parse_identifier);
+                        capture = try parse_reference(p, true, parse_identifier);
                         _ = try p.expect_token(.pipe);
                     }
 
@@ -574,15 +590,20 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
 
 // Assignment <- PostfixExpr AssignmentOp Expr ";"
 // AssignmentOp <- "=" / "+=" / "-=" / "*=" / "/=" / "|=" / "&=" / "^=" / "<<=" / ">>="
-fn parse_assigment_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.Index {
-    const id_node = Node{ .integer_lit = id_tok.index };
-    const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
+fn parse_assignment(p: *Parser, consume_semi: bool) ParseError!Node.Index {
+    const target = try parse_postfix_expr(p, true);
+    print("Parsed target.\n", .{});
+    return parse_assigment_w_target(p, target, consume_semi);
+}
 
+fn parse_assigment_w_target(p: *Parser, target: Node.Index, consume_semi: bool) ParseError!Node.Index {
     const assignment_tok = try p.next_token();
     switch (assignment_tok.type) {
         .equal, .plus_equal, .minus_equal, .slash_equal, .pipe_equal, .ampersand_equal, .caret_equal, .l_arrow2_equal, .r_arrow2_equal => {
-            const expr = try parse_expr(p, 0);
-            _ = try p.expect_token(.semicolon);
+            const expr = try parse_expr(p, 0, true);
+            if (consume_semi) {
+                _ = try p.expect_token(.semicolon);
+            }
             const node = Node{ .assignment = .{ .token = assignment_tok.index, .target = target, .expr = expr } };
             return p.append_node(node);
         },
@@ -590,9 +611,9 @@ fn parse_assigment_w_id(p: *Parser, id_tok: Parser.TokenInfo) ParseError!Node.In
     }
 }
 
-const GenericParseFn = *const fn (p: *Parser) ParseError!Node.Index;
+const GenericParseFn = *const fn (p: *Parser, allow_contain_lit: bool) ParseError!Node.Index;
 
-inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) ParseError!Node.Index {
+inline fn parse_reference(p: *Parser, blocks_allowed: bool, comptime parse_after: GenericParseFn) ParseError!Node.Index {
     const ampersand = try p.next_token();
     if (ampersand.type != .ampersand and ampersand.type != .ampersand2) {
         return error.UnexpectedToken;
@@ -603,10 +624,10 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
     switch (maybe_cap.type) {
         .keyword_mut => {
             _ = try p.next_token();
-            prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
+            prefix_node = Node{ .ref_mut = .{ .ref_tok = ampersand, .target = try parse_after(p, blocks_allowed) } };
         },
         else => {
-            prefix_node = Node{ .ref = .{ .ref_tok = ampersand, .target = try parse_after(p) } };
+            prefix_node = Node{ .ref = .{ .ref_tok = ampersand, .target = try parse_after(p, blocks_allowed) } };
         },
     }
 
@@ -626,32 +647,30 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
 // PrefixExpr <- PrefixOps* PostfixExpr
 
 // TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
-fn parse_prefix_expr(
-    p: *Parser,
-) ParseError!Node.Index {
+fn parse_prefix_expr(p: *Parser, blocks_allowed: bool) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
         .minus, .not => {
             const token = p.next_token() catch undefined;
-            const prefix_expr = try parse_prefix_expr(p);
+            const prefix_expr = try parse_prefix_expr(p, blocks_allowed);
             const prefix_node = Node{ .prefix_exp = .{ .token = token, .target = prefix_expr } };
             return p.append_node(prefix_node);
         },
-        .ampersand, .ampersand2 => return parse_reference(p, parse_prefix_expr),
-        else => return parse_postfix_expr(p),
+        .ampersand, .ampersand2 => return parse_reference(p, blocks_allowed, parse_prefix_expr),
+        else => return parse_postfix_expr(p, blocks_allowed),
     }
 }
 
 // TypePrefixOps = ReferenceOp / "[" "]"
 // TypeExpr <- TypePrefixOps* PostfixExpr
-fn parse_type_expr(p: *Parser) ParseError!Node.Index {
+fn parse_type_expr(p: *Parser, blocks_allowed: bool) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
         .l_bracket => return error.Unimplemented,
-        .ampersand, .ampersand2 => return parse_reference(p, parse_type_expr),
-        else => return parse_postfix_expr(p),
+        .ampersand, .ampersand2 => return parse_reference(p, blocks_allowed, parse_type_expr),
+        else => return parse_postfix_expr(p, blocks_allowed),
     }
 }
 
@@ -667,24 +686,29 @@ fn parse_type_expr(p: *Parser) ParseError!Node.Index {
 //   / INTEGER
 //   / IfExpr / ContainerLiteral / ContainerDefinition
 
-fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
+fn parse_postfix_expr(p: *Parser, blocks_allowed: bool) ParseError!Node.Index {
     // First, parse a primary expr
     const tok = try p.next_token();
     var primary: Node.Index = undefined;
     switch (tok.type) {
         .l_paren => {
-            primary = try parse_expr(p, 0);
+            primary = try parse_expr(p, 0, blocks_allowed);
             _ = try p.expect_token(.r_paren);
         },
         .integer_bin, .integer_oct, .integer_hex, .integer_dec => primary = try p.append_node(.{ .integer_lit = tok.index }),
         .identifier => primary = try p.append_node(Node{ .identifier = tok.index }),
-        else => return error.Unimplemented,
+        .dot => return error.Unimplemented,
+
+        // ContainerDefinition <- ("struct" / "enum") "{" Decl* "}"
+        .keyword_struct => return error.Unimplemented,
+        .keyword_enum => return error.Unimplemented,
+        else => return error.UnexpectedToken,
     }
 
-    return parse_postfix_expr_w_prim(p, primary);
+    return parse_postfix_expr_w_prim(p, primary, blocks_allowed);
 }
 
-fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseError!Node.Index {
+fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index, blocks_allowed: bool) ParseError!Node.Index {
     // Parse postfix
     var primary = pre_parsed_primary;
     while (true) {
@@ -697,9 +721,9 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
             .l_paren => {
                 const start_paren = p.next_token() catch undefined;
 
-                var expr_count: u32 = 0;
+                var expr_count: usize = 0;
                 while (true) {
-                    const expr = try parse_expr(p, 0);
+                    const expr = try parse_expr(p, 0, true);
                     try p.scratch.append(expr);
                     expr_count += 1;
                     peek = try p.peek_token();
@@ -739,6 +763,52 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
 
                 primary = try p.append_node(fn_node);
             },
+            // Container literal
+            // ContainerLiteral <- "{" Assignment* "}"
+            .l_brace => {
+                if (blocks_allowed == false) {
+                    return primary;
+                }
+
+                _ = p.next_token() catch undefined;
+
+                var assignments: ?[]Node.Index = null;
+                print("Got to containter literal \n", .{});
+                peek = try p.peek_token();
+                while (peek.type != .r_brace) {
+                    const assignment = try parse_assignment(p, false);
+                    try p.scratch.append(assignment);
+
+                    if (assignments) |*a| {
+                        a.len += 1;
+                    } else {
+                        assignments = p.scratch.items[p.scratch.items.len - 1 ..];
+                    }
+                    print("Parsed single assigment\n", .{});
+
+                    peek = try p.peek_token();
+                    if (peek.type == .semicolon) {
+                        _ = p.next_token() catch undefined;
+                    }
+                    peek = try p.peek_token();
+                }
+                _ = try p.expect_token(.r_brace);
+
+                var container_node: Node = undefined;
+                if (assignments) |a| {
+                    if (a.len == 1) {
+                        container_node = Node{ .container_literal_one = .{ .target_type = primary, .assignment = a[0] } };
+                    } else {
+                        const slice = try p.pop_scratch_to_extra(a.len);
+                        container_node = Node{ .container_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
+                    }
+                } else {
+                    container_node = Node{ .container_literal_empty = .{ .target_type = primary } };
+                }
+
+                primary = try p.append_node(container_node);
+            },
+
             .l_bracket, .dot => return error.Unimplemented,
             else => return primary,
         }
@@ -765,10 +835,10 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
     }
 }
 
-fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
+fn parse_expr(p: *Parser, start_prec: Precedence, blocks_allowed: bool) ParseError!Node.Index {
     // Parse an "atom"/left hand side of expression
     // TODO: Add pre-fix and post-fix parsing
-    var lhs = try parse_prefix_expr(p);
+    var lhs = try parse_prefix_expr(p, blocks_allowed);
     var maybe_op = try p.peek_token();
 
     var cur_prec = start_prec;
@@ -780,7 +850,7 @@ fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
 
         const op_token = try p.next_token();
 
-        const rhs = try parse_expr(p, op_prec);
+        const rhs = try parse_expr(p, op_prec, blocks_allowed);
         const op_node = Node{ .binary_exp = Node.BinaryExp{ .op_tok = op_token.index, .lhs = lhs, .rhs = rhs } };
 
         lhs = try p.append_node(op_node);
@@ -954,6 +1024,20 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             print("Fn call \n", .{});
             const fn_call = p.get_extra_struct(Node.FnCallFull, extra);
             try print_ast_slice(p, prefix, fn_call.args);
+        },
+
+        .container_literal_empty => {
+            print("Empty container lit.\n", .{});
+        },
+
+        .container_literal_one => |lit| {
+            print("Container lit. single\n", .{});
+            try print_ast(p, prefix, true, lit.assignment);
+        },
+
+        .container_literal => |lit| {
+            print("Container lit.\n", .{});
+            try print_ast_slice(p, prefix, .{ .start = lit.assignments_start, .end = lit.assignments_end });
         },
 
         .integer_lit, .identifier => |tok_index| {
