@@ -91,8 +91,13 @@ const TokenState = enum {
     dot, // "."
 };
 
-inline fn equals_or_single(cur_char: u8, equals_tok: TokenType, single_tok: TokenType) TokenType {
-    return if (cur_char == '=') equals_tok else single_tok;
+inline fn equals_or_single(cur_char: u8, pos: *SourceIndex, equals_tok: TokenType, single_tok: TokenType) TokenType {
+    if (cur_char == '=') {
+        pos.* += 1;
+        return equals_tok;
+    } else {
+        return single_tok;
+    }
 }
 
 pub const SourceIndex = u32;
@@ -315,8 +320,8 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                 else => return TokenFull.init(.integer_hex, start, pos),
             },
 
-            .equal => return TokenFull.init(equals_or_single(cur_char, .equal2, .equal), start, pos),
-            .plus => return TokenFull.init(equals_or_single(cur_char, .plus_equal, .plus), start, pos),
+            .equal => return TokenFull.init(equals_or_single(cur_char, &pos, .equal2, .equal), start, pos),
+            .plus => return TokenFull.init(equals_or_single(cur_char, &pos, .plus_equal, .plus), start, pos),
             .minus => {
                 switch (cur_char) {
                     '>' => {
@@ -330,7 +335,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                     else => return TokenFull.init(.minus, start, pos),
                 }
             },
-            .asterisk => return TokenFull.init(equals_or_single(cur_char, .asterisk_equal, .asterisk), start, pos),
+            .asterisk => return TokenFull.init(equals_or_single(cur_char, &pos, .asterisk_equal, .asterisk), start, pos),
             .slash => {
                 switch (cur_char) {
                     '=' => {
@@ -364,7 +369,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                         pos += 1;
                         return TokenFull.init(.pipe2, start, pos);
                     },
-                    else => return TokenFull.init(.pipe2, start, pos),
+                    else => return TokenFull.init(.pipe, start, pos),
                 }
             },
             .ampersand => {
@@ -380,8 +385,8 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                     else => return TokenFull.init(.ampersand, start, pos),
                 }
             },
-            .caret => return TokenFull.init(equals_or_single(cur_char, .caret_equal, .caret), start, pos),
-            .not => return TokenFull.init(equals_or_single(cur_char, .not_equal, .not), start, pos),
+            .caret => return TokenFull.init(equals_or_single(cur_char, &pos, .caret_equal, .caret), start, pos),
+            .not => return TokenFull.init(equals_or_single(cur_char, &pos, .not_equal, .not), start, pos),
 
             .r_arrow => {
                 switch (cur_char) {

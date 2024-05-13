@@ -13,3 +13,5 @@ A WIP compiler for the anvil language.
 -array indexing
 -container definition/literals
 -while loops
+-capture
+-ifexpr (different from ifstatement)

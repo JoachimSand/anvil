@@ -46,8 +46,12 @@ const Node = union(enum) {
     },
 
     // TODO: For future error reporting we would like to store the location of the if_token
-    // TODO: Captures
     if_statement: struct {
+        condition: Index,
+        block: Index,
+    },
+    if_statement_capture: struct {
+        capture_ref: Index,
         condition: Index,
         block: Index,
     },
@@ -56,6 +60,7 @@ const Node = union(enum) {
         block: Index,
         else_block: Index,
     },
+    if_else_statement_capture: ExtraIndex,
 
     assignment: struct {
         token: Parser.TokenIndex,
@@ -152,6 +157,13 @@ const Node = union(enum) {
         start_paren: Parser.TokenIndex,
     };
 
+    const IfElseCapture = struct {
+        condition: Index,
+        capture_ref: Index,
+        block: Index,
+        else_block: Index,
+    };
+
     const IndexSlice = packed struct {
         start: ExtraIndex,
         end: ExtraIndex,
@@ -213,6 +225,7 @@ const Parser = struct {
     fn next_token(p: *Parser) ParseError!TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
+            print("Next {any} \n", .{tok});
             p.cur_token += 1;
             return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
         } else {
@@ -234,6 +247,7 @@ const Parser = struct {
     fn peek_token(p: *Parser) !TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
+            print("Peeked {any} \n", .{tok});
             return TokenInfo{ .type = tok.type, .index = p.cur_token };
         } else {
             return error.EarlyTermination;
@@ -415,6 +429,12 @@ fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo, comptime is_param_d
 // Statement
 //   <- Decl / Assignment / Block / IfStatement
 
+fn parse_identifier(p: *Parser) ParseError!Node.Index {
+    const id_tok = try p.expect_token(.identifier);
+    const node = Node{ .identifier = id_tok.index };
+    return p.append_node(node);
+}
+
 fn parse_block(p: *Parser) ParseError!Node.Index {
     const l_brace = try p.expect_token(.l_brace);
 
@@ -441,23 +461,42 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
 
             .keyword_if => {
 
-                // IfStatement <- "if" Expr Block ("else" (IfStatement / Block))?
+                // IfStatement <- "if" Expr Capture? Block ("else" (IfStatement / Block))?
                 var prev_else_index: ?Node.Index = null;
                 while (true) {
                     const if_tok = try p.next_token();
                     _ = if_tok;
                     const expr = try parse_expr(p, 0);
+
+                    // Possible capture
+                    var peek = try p.peek_token();
+
+                    // Capture <- "|" ReferenceOp? Identifier "|"
+                    var capture: ?Node.Index = null;
+                    if (peek.type == .pipe) {
+                        _ = p.next_token() catch undefined;
+                        capture = try parse_reference(p, parse_identifier);
+                        _ = try p.expect_token(.pipe);
+                    }
+
                     const block = try parse_block(p);
 
                     // Potential else case
-                    var peek = try p.peek_token();
+                    peek = try p.peek_token();
                     if (peek.type == .keyword_else) {
                         _ = try p.next_token();
 
                         // Create an if-else node with the else case to be set as the subsequent block
-                        // in the else case, and alternatively by the next it
-                        const node = Node{ .if_else_statement = .{ .condition = expr, .block = block, .else_block = undefined } };
-                        const index = try p.append_node(node);
+                        // in the else case, and alternatively by the next iteration of the loop
+                        var index: Node.Index = undefined;
+                        if (capture) |cap_index| {
+                            const extra = Node.IfElseCapture{ .condition = expr, .capture_ref = cap_index, .block = block, .else_block = undefined };
+                            const e_index = try p.append_extra_struct(Node.IfElseCapture, extra);
+                            index = try p.append_node(Node{ .if_else_statement_capture = e_index });
+                        } else {
+                            const node = Node{ .if_else_statement = .{ .condition = expr, .block = block, .else_block = undefined } };
+                            index = try p.append_node(node);
+                        }
                         try p.scratch.append(index);
 
                         if (prev_else_index) |else_index| {
@@ -466,21 +505,26 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
 
                         peek = try p.peek_token();
                         switch (peek.type) {
+                            .keyword_if => {
+                                // else-if. The node created on this iteration will have it's destination set by the next
+                                // iteration.
+                                prev_else_index = index;
+                            },
                             .l_brace => {
                                 // final else
                                 const else_block = try parse_block(p);
                                 p.nodes.items[index].if_else_statement.else_block = else_block;
                                 break;
                             },
-                            .keyword_if => {
-                                // else-if. The node created on this iteration will have it's destination set by the next
-                                // iteration.
-                                prev_else_index = index;
-                            },
                             else => return error.UnexpectedToken,
                         }
                     } else {
-                        const node = Node{ .if_statement = .{ .condition = expr, .block = block } };
+                        var node: Node = undefined;
+                        if (capture) |cap_index| {
+                            node = Node{ .if_statement_capture = .{ .condition = expr, .capture_ref = cap_index, .block = block } };
+                        } else {
+                            node = Node{ .if_statement = .{ .condition = expr, .block = block } };
+                        }
                         const index = try p.append_node(node);
 
                         if (prev_else_index) |else_index| {
@@ -599,14 +643,14 @@ fn parse_prefix_expr(
     }
 }
 
-// TypePrefixOps = "&" / "[" "]"
+// TypePrefixOps = ReferenceOp / "[" "]"
 // TypeExpr <- TypePrefixOps* PostfixExpr
 fn parse_type_expr(p: *Parser) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
         .l_bracket => return error.Unimplemented,
-        .ampersand, .ampersand2 => return parse_reference(p, parse_prefix_expr),
+        .ampersand, .ampersand2 => return parse_reference(p, parse_type_expr),
         else => return parse_postfix_expr(p),
     }
 }
@@ -785,7 +829,7 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
     switch (node) {
         .fn_decl => |decl| {
             const id_str = p.get_tok_str(decl.identifier);
-            print("fn {s} \n", .{id_str});
+            print("fn decl {s} \n", .{id_str});
             try print_ast(p, prefix, false, decl.ret_type);
             try print_ast(p, prefix, true, decl.block);
         },
@@ -793,7 +837,7 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
         .fn_decl_params => |index| {
             const decl = p.get_extra_struct(Node.FnDeclParams, index);
             const id_str = p.get_tok_str(decl.identifier);
-            print("fn {s} \n", .{id_str});
+            print("fn params {s} \n", .{id_str});
 
             const param_indent = try print_ast_prefix(prefix, false);
             print("Parameters\n", .{});
@@ -801,7 +845,7 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast_slice(p, prefix, decl.params);
             prefix.items.len -= param_indent;
 
-            // try print_ast(p, prefix, false, decl.ret_type);
+            try print_ast(p, prefix, false, decl.ret_type);
             try print_ast(p, prefix, true, decl.block);
         },
         .var_decl_full => |decl| {
@@ -834,10 +878,25 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast(p, prefix, false, statement.condition);
             try print_ast(p, prefix, true, statement.block);
         },
+        .if_statement_capture => |statement| {
+            print("if capture\n", .{});
+            try print_ast(p, prefix, false, statement.condition);
+            try print_ast(p, prefix, false, statement.capture_ref);
+            try print_ast(p, prefix, true, statement.block);
+        },
 
         .if_else_statement => |statement| {
             print("if else\n", .{});
             try print_ast(p, prefix, false, statement.condition);
+            try print_ast(p, prefix, false, statement.block);
+            try print_ast(p, prefix, true, statement.else_block);
+        },
+
+        .if_else_statement_capture => |e_index| {
+            const statement = p.get_extra_struct(Node.IfElseCapture, e_index);
+            print("if else capture\n", .{});
+            try print_ast(p, prefix, false, statement.condition);
+            try print_ast(p, prefix, false, statement.capture_ref);
             try print_ast(p, prefix, false, statement.block);
             try print_ast(p, prefix, true, statement.else_block);
         },
