@@ -1,7 +1,7 @@
 fn foo(a : i8, b : u) -> void {
 	a = 3*(4+5*3);
 	b = malloc(3);
-	if c {
-		a = Node { a = b; b = Node2 { c = d}};
+	if c == f {
+		a = Node { a = b;};
 	}
 }

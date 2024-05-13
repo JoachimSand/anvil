@@ -767,7 +767,7 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index, blocks_
             // ContainerLiteral <- "{" Assignment* "}"
             .l_brace => {
                 if (blocks_allowed == false) {
-                    return primary;
+                    return error.BlockNotAllowed;
                 }
 
                 _ = p.next_token() catch undefined;
@@ -828,6 +828,9 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
     switch (token_type) {
         .keyword_or => return 1,
         .keyword_and => return 2,
+        .equal2, .not_equal, .l_arrow_equal, .r_arrow_equal, .l_arrow, .r_arrow => return 3,
+        .ampersand, .pipe, .caret => return 4,
+        .l_arrow2, .r_arrow2 => return 5,
         .plus, .minus => return 6,
         .asterisk, .slash => return 7,
 
