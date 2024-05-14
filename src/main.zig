@@ -94,6 +94,8 @@ const Node = union(enum) {
         target_type: Index,
     },
 
+    field_access: struct { target: Index, field_id: Parser.TokenIndex },
+
     binary_exp: BinaryExp,
 
     prefix_exp: Prefix,
@@ -358,7 +360,6 @@ fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     }
 
     _ = try p.expect_token(.r_paren);
-
     _ = try p.expect_token(.minus_arrow);
 
     const type_expr = try parse_type_expr(p);
@@ -705,6 +706,7 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         .keyword_enum => return error.Unimplemented,
         else => return error.UnexpectedToken,
     }
+    print("Parsed primary \n", .{});
 
     return parse_postfix_expr_w_prim(p, primary);
 }
@@ -769,10 +771,11 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                 primary = try p.append_node(fn_node);
             },
             .dot => {
-                peek = p.next_token() catch undefined;
-                peek = try p.peek_token();
+                _ = p.next_token() catch undefined;
 
+                peek = try p.peek_token();
                 if (peek.type == .l_brace) {
+                    _ = p.next_token() catch undefined;
                     // Container literal
                     var assignments: ?[]Node.Index = null;
                     print("Got to containter literal \n", .{});
@@ -810,14 +813,13 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
 
                     primary = try p.append_node(container_node);
                 } else if (peek.type == .identifier) {
-                    return error.Unimplemented;
+                    // Field access
+                    const field_tok = p.next_token() catch undefined;
+                    const node = Node{ .field_access = .{ .target = primary, .field_id = field_tok.index } };
+                    primary = try p.append_node(node);
                 } else {
                     return error.UnexpectedToken;
                 }
-            },
-
-            .l_brace => {
-                _ = p.next_token() catch undefined;
             },
 
             .l_bracket => return error.Unimplemented,
@@ -1040,18 +1042,27 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast_slice(p, prefix, fn_call.args);
         },
 
-        .container_literal_empty => {
+        .container_literal_empty => |lit| {
             print("Empty container lit.\n", .{});
+            try print_ast(p, prefix, true, lit.target_type);
         },
 
         .container_literal_one => |lit| {
             print("Container lit. single\n", .{});
+            try print_ast(p, prefix, false, lit.target_type);
             try print_ast(p, prefix, true, lit.assignment);
         },
 
         .container_literal => |lit| {
             print("Container lit.\n", .{});
+            try print_ast(p, prefix, false, lit.target_type);
             try print_ast_slice(p, prefix, .{ .start = lit.assignments_start, .end = lit.assignments_end });
+        },
+
+        .field_access => |f| {
+            const field_name = p.get_tok_str(f.field_id);
+            print("Field access .{s}\n", .{field_name});
+            try print_ast(p, prefix, true, f.target);
         },
 
         .integer_lit, .identifier => |tok_index| {
