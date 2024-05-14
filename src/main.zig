@@ -77,8 +77,36 @@ const Node = union(enum) {
         start_brace: Parser.TokenIndex,
         statement: Index,
     },
-    empty_block: struct {
+    block_empty: struct {
         start_brace: Parser.TokenIndex,
+    },
+
+    // TODO: Struct and enum definition nodes can both be extended
+    // by a single field
+    struct_definition: struct {
+        struct_keyword: Parser.TokenIndex,
+        statements_start: Index,
+        statements_end: Index,
+    },
+    struct_definition_one: struct {
+        struct_keyword: Parser.TokenIndex,
+        statement: Index,
+    },
+    struct_definition_empty: struct {
+        struct_keyword: Parser.TokenIndex,
+    },
+
+    enum_definition: struct {
+        enum_keyword: Parser.TokenIndex,
+        statements_start: Index,
+        statements_end: Index,
+    },
+    enum_definition_one: struct {
+        enum_keyword: Parser.TokenIndex,
+        statement: Index,
+    },
+    enum_definition_empty: struct {
+        enum_keyword: Parser.TokenIndex,
     },
 
     container_literal: struct {
@@ -451,14 +479,58 @@ fn parse_identifier(p: *Parser) ParseError!Node.Index {
     return p.append_node(node);
 }
 
+fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements: ?[]Node.Index, comptime tok_field: []const u8, tok: Parser.TokenIndex) ParseError!Node.Index {
+    var node: Node = undefined;
+    if (statements) |*s| {
+        if (s.len == 1) {
+            node = @unionInit(Node, node_name ++ "_one", undefined);
+            @field(node, node_name ++ "_one").statement = s.*[0];
+            @field(@field(node, node_name ++ "_one"), tok_field) = tok;
+            p.scratch.items.len -= s.len;
+        } else {
+            const slice = try p.pop_scratch_to_extra(s.len);
+            node = @unionInit(Node, node_name, undefined);
+            @field(node, node_name).statements_start = slice.start;
+            @field(node, node_name).statements_start = slice.end;
+            @field(@field(node, node_name), tok_field) = tok;
+            // node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
+        }
+    } else {
+        @field(@field(node, node_name ++ "_empty"), tok_field) = tok;
+    }
+
+    return p.append_node(node);
+}
+
+//
 fn parse_block(p: *Parser) ParseError!Node.Index {
     const l_brace = try p.expect_token(.l_brace);
+    const statements = try parse_statements(p);
 
+    // var block_node: Node = undefined;
+    // if (statements) |*s| {
+    //     if (s.len == 1) {
+    //         block_node = Node{ .block_one = .{ .start_brace = l_brace.index, .statement = s.*[0] } };
+    //         p.scratch.items.len -= s.len;
+    //     } else {
+    //         const slice = try p.pop_scratch_to_extra(s.len);
+    //         block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
+    //     }
+    // } else {
+    //     block_node = Node{ .block_empty = .{ .start_brace = l_brace.index } };
+    // }
+    const block_node = try create_statements_node(p, "block", statements, "start_brace", l_brace.index);
+
+    return block_node;
+}
+
+// Will keep parsing statements until r_brace is encountered;
+fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
     // TODO: Better error reporting regarding braces like in ember
-    var next_tok = try p.peek_token();
+    var peek_tok = try p.peek_token();
     var statements: ?[]Node.Index = null;
-    while (next_tok.type != .r_brace) {
-        switch (next_tok.type) {
+    while (peek_tok.type != .r_brace) {
+        switch (peek_tok.type) {
             .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
             .l_brace => try p.scratch.append(try parse_block(p)),
             // TODO: Variable-only keywords here can be used to start parsing for
@@ -564,26 +636,9 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
             statements = p.scratch.items[p.scratch.items.len - 1 ..];
         }
 
-        next_tok = try p.peek_token();
-
-        // return error.Unimplemented;
+        peek_tok = try p.peek_token();
     }
-    _ = try p.next_token();
-
-    var block_node: Node = undefined;
-    if (statements) |*s| {
-        if (s.len == 1) {
-            block_node = Node{ .block_one = .{ .start_brace = l_brace.index, .statement = s.*[0] } };
-            p.scratch.items.len -= s.len;
-        } else {
-            const slice = try p.pop_scratch_to_extra(@intCast(s.len));
-            block_node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
-        }
-    } else {
-        block_node = Node{ .empty_block = .{ .start_brace = l_brace.index } };
-    }
-
-    return p.append_node(block_node);
+    return statements;
 }
 
 // FieldAccess <- "." Identifier
@@ -702,8 +757,18 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         .dot => return error.Unimplemented,
 
         // ContainerDefinition <- ("struct" / "enum") "{" Decl* "}"
-        .keyword_struct => return error.Unimplemented,
-        .keyword_enum => return error.Unimplemented,
+        .keyword_struct => {
+            _ = try p.expect_token(.l_brace);
+            const statements = try parse_statements(p);
+            primary = try create_statements_node(p, "struct_definition", statements, "struct_keyword", tok.index);
+            _ = try p.expect_token(.r_brace);
+        },
+        .keyword_enum => {
+            _ = try p.expect_token(.l_brace);
+            const statements = try parse_statements(p);
+            primary = try create_statements_node(p, "enum_definition", statements, "enum_keyword", tok.index);
+            _ = try p.expect_token(.r_brace);
+        },
         else => return error.UnexpectedToken,
     }
     print("Parsed primary \n", .{});
@@ -987,17 +1052,45 @@ fn print_ast(p: *Parser, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Pa
             try print_ast(p, prefix, true, statement.else_block);
         },
 
-        .empty_block => {
+        .block_empty => {
             print("Empty block\n", .{});
         },
 
         .block_one => |block| {
-            print("Block\n", .{});
+            print("Block one\n", .{});
             try print_ast(p, prefix, true, block.statement);
         },
 
         .block => |block| {
             print("Block\n", .{});
+            try print_ast_slice(p, prefix, .{ .start = block.statements_start, .end = block.statements_end });
+        },
+
+        .struct_definition_empty => {
+            print("Empty struct def.\n", .{});
+        },
+
+        .struct_definition_one => |block| {
+            print("Struct def. one\n", .{});
+            try print_ast(p, prefix, true, block.statement);
+        },
+
+        .struct_definition => |block| {
+            print("Struct def.\n", .{});
+            try print_ast_slice(p, prefix, .{ .start = block.statements_start, .end = block.statements_end });
+        },
+
+        .enum_definition_empty => {
+            print("Empty struct def.\n", .{});
+        },
+
+        .enum_definition_one => |block| {
+            print("Enum def. one\n", .{});
+            try print_ast(p, prefix, true, block.statement);
+        },
+
+        .enum_definition => |block| {
+            print("Enum def.\n", .{});
             try print_ast_slice(p, prefix, .{ .start = block.statements_start, .end = block.statements_end });
         },
 
