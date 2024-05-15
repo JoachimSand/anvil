@@ -1,3 +1,4 @@
 fn foo(a : i8, b : u) -> struct { a : u32; } {
 	a = Node.test.{ a= 3;};
+	b = print(t);
 }

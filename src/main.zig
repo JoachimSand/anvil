@@ -491,7 +491,7 @@ fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements
             const slice = try p.pop_scratch_to_extra(s.len);
             node = @unionInit(Node, node_name, undefined);
             @field(node, node_name).statements_start = slice.start;
-            @field(node, node_name).statements_start = slice.end;
+            @field(node, node_name).statements_end = slice.end;
             @field(@field(node, node_name), tok_field) = tok;
             // node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
         }
@@ -519,6 +519,7 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
     // } else {
     //     block_node = Node{ .block_empty = .{ .start_brace = l_brace.index } };
     // }
+    print("Parsed {any} statements\n", .{statements.?.len});
     const block_node = try create_statements_node(p, "block", statements, "start_brace", l_brace.index);
 
     return block_node;
