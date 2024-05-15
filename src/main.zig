@@ -566,7 +566,13 @@ fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                     var capture: ?Node.Index = null;
                     if (peek.type == .pipe) {
                         _ = p.next_token() catch undefined;
-                        capture = try parse_reference(p, parse_identifier);
+                        peek = try p.peek_token();
+                        if (peek.type == .ampersand or peek.type == .ampersand2) {
+                            capture = try parse_reference(p, parse_identifier);
+                        } else {
+                            capture = try parse_identifier(p);
+                        }
+
                         _ = try p.expect_token(.pipe);
                     }
 
@@ -647,7 +653,7 @@ fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 // Indexing <- "[" Expr (".." Expr?)? "]"
 
 // Assignment <- PostfixExpr AssignmentOp Expr ";"
-// AssignmentOp <- "=" / "+=" / "-=" / "*=" / "/=" / "|=" / "&=" / "^=" / "<<=" / ">>="
+// AssignmentOp <- "=" / "+=" / "-=" / "*=" / "/=" / "||=" / "&&=" / "^=" / "<<=" / ">>="
 fn parse_assignment(p: *Parser, consume_semi: bool) ParseError!Node.Index {
     const target = try parse_postfix_expr(p);
     print("Parsed target.\n", .{});
@@ -657,7 +663,7 @@ fn parse_assignment(p: *Parser, consume_semi: bool) ParseError!Node.Index {
 fn parse_assigment_w_target(p: *Parser, target: Node.Index, consume_semi: bool) ParseError!Node.Index {
     const assignment_tok = try p.next_token();
     switch (assignment_tok.type) {
-        .equal, .plus_equal, .minus_equal, .slash_equal, .pipe_equal, .ampersand_equal, .caret_equal, .l_arrow2_equal, .r_arrow2_equal => {
+        .equal, .plus_equal, .minus_equal, .slash_equal, .pipe2_equal, .ampersand2_equal, .caret_equal, .l_arrow2_equal, .r_arrow2_equal => {
             const expr = try parse_expr(p, 0);
             if (consume_semi) {
                 _ = try p.expect_token(.semicolon);
@@ -908,7 +914,7 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
         .keyword_or => return 1,
         .keyword_and => return 2,
         .equal2, .not_equal, .l_arrow_equal, .r_arrow_equal, .l_arrow, .r_arrow => return 3,
-        .ampersand, .pipe, .caret => return 4,
+        .ampersand2, .pipe2, .caret => return 4,
         .l_arrow2, .r_arrow2 => return 5,
         .plus, .minus => return 6,
         .asterisk, .slash => return 7,
