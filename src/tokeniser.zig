@@ -1,6 +1,8 @@
 const std = @import("std");
 const print = std.debug.print;
 
+const parser_mod = @import("parser.zig");
+
 pub const TokenType = enum {
     identifier,
     integer_bin,
