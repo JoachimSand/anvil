@@ -1,8 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
 
-const parser_mod = @import("parser.zig");
-
 pub const TokenType = enum {
     identifier,
     integer_bin,
@@ -109,6 +107,8 @@ pub const SourceIndex = u32;
 pub const Token = struct {
     type: TokenType,
     start: SourceIndex,
+
+    pub const List = std.MultiArrayList(Token);
 };
 
 pub const TokenFull: type = struct {
@@ -134,9 +134,19 @@ const KeywordMap = std.ComptimeStringMap(TokenType, .{
 
 pub const Tokeniser = struct {
     src: []const u8,
-    cur_tok_start: SourceIndex,
-    cur_pos: SourceIndex,
-    cur_token: ?TokenFull,
+    cur_tok_start: SourceIndex = 0,
+    cur_pos: SourceIndex = 0,
+    cur_token: ?TokenFull = null,
+
+    pub fn tokenise_all(tokeniser: *Tokeniser, allocator: std.mem.Allocator) !Token.List {
+        var tok_list = Token.List{};
+        while (true) {
+            const tok = tokeniser.next_token() catch break;
+            try tok_list.append(allocator, .{ .type = tok.type, .start = tok.start });
+            // print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
+        }
+        return tok_list;
+    }
 
     pub fn next_token(tokeniser: *Tokeniser) !TokenFull {
         if (tokeniser.cur_token) |token| {

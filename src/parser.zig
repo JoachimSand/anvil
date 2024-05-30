@@ -17,6 +17,11 @@ const unicode = std.unicode;
 // Tag takes up 1 byte, meaning we have at most 3 available
 // 4 byte fields.
 pub const Node = union(enum) {
+    root: struct {
+        statements_start: Index,
+        statements_end: Index,
+    },
+
     // Specified return type, no parameters/deps
     fn_decl: struct {
         identifier: Parser.TokenIndex,
@@ -178,6 +183,7 @@ pub const Node = union(enum) {
 
     pub const Index = u32;
     pub const ExtraIndex = u32;
+    pub const List = std.ArrayList(Node);
 
     pub const Prefix = struct {
         target: Index,
@@ -244,11 +250,50 @@ const ParseSpecificError = error{
 
 pub const ParseError = ParseSpecificError || std.mem.Allocator.Error;
 
+pub const Ast = struct {
+    src: []const u8,
+    nodes: Node.List,
+    extra: std.ArrayList(u32),
+
+    tokens: Token.List,
+    allocator: std.mem.Allocator,
+    root: Node.Index,
+
+    pub fn get_tok_str(a: *Ast, tok_index: Parser.TokenIndex) []const u8 {
+        return token_to_str(a.tokens.get(tok_index), a.src);
+    }
+
+    pub fn get_extra_struct(a: *Ast, comptime s_typ: type, extra_index: Node.ExtraIndex) s_typ {
+        const type_info = @typeInfo(s_typ);
+        if (type_info == .Struct) {
+            const s_info = type_info.Struct;
+            var s: s_typ = undefined;
+
+            comptime var offset = 0;
+            inline for (s_info.fields) |field| {
+                if (field.type == u32) {
+                    const field_val = a.extra.items[extra_index + offset];
+                    @field(s, field.name) = field_val;
+                    offset += 1;
+                } else {
+                    const field_val = a.get_extra_struct(field.type, extra_index + offset);
+                    @field(s, field.name) = field_val;
+                    offset += @typeInfo(field.type).Struct.fields.len;
+                }
+            }
+            return s;
+        } else {
+            @panic("Can only retrieve structs of structs/u32s");
+        }
+    }
+};
+
 pub const Parser = struct {
     src: []const u8,
+    allocator: std.mem.Allocator,
 
-    nodes: NodeList,
-    tokens: TokenList,
+    nodes: Node.List,
+    tokens: Token.List = Token.List{},
     cur_token: TokenIndex = 0,
 
     // TODO: Make this a memory allocator instead.
@@ -261,15 +306,38 @@ pub const Parser = struct {
     scratch: NodeIndexList,
 
     pub const TokenIndex = u32;
-    pub const TokenList = std.MultiArrayList(Token);
     pub const NodeIndex = u32;
-    pub const NodeList = std.ArrayList(Node);
     pub const NodeIndexList = std.ArrayList(NodeIndex);
 
     const TokenInfo = struct {
         type: TokenType,
         index: TokenIndex,
     };
+
+    pub fn init(src: []const u8, tokens: Token.List, allocator: std.mem.Allocator) Parser {
+        var parser = Parser{ .src = src, .allocator = allocator, .tokens = tokens, .nodes = Node.List.init(allocator), .extra = std.ArrayList(u32).init(allocator), .scratch = Parser.NodeIndexList.init(allocator) };
+        return parser;
+    }
+
+    pub fn deinit(p: *Parser) void {
+        p.tokens.deinit(p.allocator);
+        p.nodes.deinit();
+        p.extra.deinit();
+        p.scratch.deinit();
+    }
+
+    pub fn get_ast(p: *Parser) !Ast {
+        const root = try parse_root(p);
+        const ast = Ast{
+            .src = p.src,
+            .nodes = p.nodes,
+            .extra = p.extra,
+            .tokens = p.tokens,
+            .allocator = p.allocator,
+            .root = root,
+        };
+        return ast;
+    }
 
     fn append_node(p: *Parser, node: Node) !NodeIndex {
         try p.nodes.append(node);
@@ -284,7 +352,7 @@ pub const Parser = struct {
     fn next_token(p: *Parser) ParseError!TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            print("Next {any} \n", .{tok});
+            // print("Next {any} \n", .{tok});
             p.cur_token += 1;
             return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
         } else {
@@ -296,7 +364,7 @@ pub const Parser = struct {
         const tok = try p.next_token();
 
         if (tok.type != tok_type) {
-            print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
+            // print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
             return error.UnexpectedToken;
         } else {
             return tok;
@@ -306,15 +374,11 @@ pub const Parser = struct {
     fn peek_token(p: *Parser) !TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            print("Peeked {any} \n", .{tok});
+            // print("Peeked {any} \n", .{tok});
             return TokenInfo{ .type = tok.type, .index = p.cur_token };
         } else {
             return error.EarlyTermination;
         }
-    }
-
-    pub fn get_tok_str(p: *Parser, tok_index: TokenIndex) []const u8 {
-        return token_to_str(p.tokens.get(tok_index), p.src);
     }
 
     fn append_extra_struct(p: *Parser, comptime s_typ: type, s: s_typ) ParseError!Node.ExtraIndex {
@@ -336,30 +400,6 @@ pub const Parser = struct {
         }
     }
 
-    pub fn get_extra_struct(p: *Parser, comptime s_typ: type, extra_index: Node.ExtraIndex) s_typ {
-        const type_info = @typeInfo(s_typ);
-        if (type_info == .Struct) {
-            const s_info = type_info.Struct;
-            var s: s_typ = undefined;
-
-            comptime var offset = 0;
-            inline for (s_info.fields) |field| {
-                if (field.type == u32) {
-                    const field_val = p.extra.items[extra_index + offset];
-                    @field(s, field.name) = field_val;
-                    offset += 1;
-                } else {
-                    const field_val = p.get_extra_struct(field.type, extra_index + offset);
-                    @field(s, field.name) = field_val;
-                    offset += @typeInfo(field.type).Struct.fields.len;
-                }
-            }
-            return s;
-        } else {
-            @panic("Can only retrieve structs of structs/u32s");
-        }
-    }
-
     fn pop_scratch_to_extra(p: *Parser, count: usize) !Node.IndexSlice {
         const elems = p.scratch.items[p.scratch.items.len - count ..];
 
@@ -371,6 +411,18 @@ pub const Parser = struct {
         return .{ .start = start, .end = end };
     }
 };
+
+pub fn parse_root(p: *Parser) ParseError!Node.Index {
+    const maybe_statements = try parse_statements(p);
+
+    if (maybe_statements) |statements| {
+        const slice = try p.pop_scratch_to_extra(statements.len);
+        const node = Node{ .root = .{ .statements_start = slice.start, .statements_end = slice.end } };
+        return p.append_node(node);
+    } else {
+        return error.EarlyTermination;
+    }
+}
 
 // Decl
 //   <- VarDecl
@@ -406,7 +458,7 @@ pub fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     _ = try p.expect_token(.minus_arrow);
 
     const type_expr = try parse_type_expr(p);
-    print("Parsed type expr \n", .{});
+    // print("Parsed type expr \n", .{});
     const block = try parse_block(p);
 
     var node: Node = undefined;
@@ -545,14 +597,14 @@ fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements
 fn parse_block(p: *Parser) ParseError!Node.Index {
     const l_brace = try p.expect_token(.l_brace);
     const statements = try parse_statements(p);
-    print("Parsed {any} statements\n", .{statements.?.len});
+    // print("Parsed {any} statements\n", .{statements.?.len});
     const block_node = try create_statements_node(p, "block", statements, "start_brace", l_brace.index);
 
     return block_node;
 }
 
-// Will keep parsing statements until r_brace is encountered;
-fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
+// Will keep parsing statements until r_brace or EOF is encountered;
+pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
     // TODO: Better error reporting regarding braces like in ember
     var peek_tok = try p.peek_token();
     var statements: ?[]Node.Index = null;
@@ -673,7 +725,7 @@ fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
             statements = p.scratch.items[p.scratch.items.len - 1 ..];
         }
 
-        peek_tok = try p.peek_token();
+        peek_tok = p.peek_token() catch |err| if (err == error.EarlyTermination) break else return err;
     }
     return statements;
 }
@@ -686,7 +738,7 @@ fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 // AssignmentOp <- "=" / "+=" / "-=" / "*=" / "/=" / "||=" / "&&=" / "^=" / "<<=" / ">>="
 fn parse_assignment(p: *Parser, consume_semi: bool) ParseError!Node.Index {
     const target = try parse_postfix_expr(p);
-    print("Parsed target.\n", .{});
+    // print("Parsed target.\n", .{});
     return parse_assigment_w_target(p, target, consume_semi);
 }
 
@@ -806,7 +858,7 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         },
         else => return error.UnexpectedToken,
     }
-    print("Parsed primary \n", .{});
+    // print("Parsed primary \n", .{});
 
     return parse_postfix_expr_w_prim(p, primary);
 }
@@ -878,7 +930,7 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     _ = p.next_token() catch undefined;
                     // Container literal
                     var assignments: ?[]Node.Index = null;
-                    print("Got to containter literal \n", .{});
+                    // print("Got to containter literal \n", .{});
                     peek = try p.peek_token();
                     while (peek.type != .r_brace) {
                         const assignment = try parse_assignment(p, false);
@@ -889,7 +941,7 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                         } else {
                             assignments = p.scratch.items[p.scratch.items.len - 1 ..];
                         }
-                        print("Parsed single assigment\n", .{});
+                        // print("Parsed single assigment\n", .{});
 
                         peek = try p.peek_token();
                         if (peek.type == .semicolon) {
@@ -974,4 +1026,31 @@ fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     }
 
     return lhs;
+}
+
+fn test_parser(file_name: []const u8) !void {
+    const pretty_print_mod = @import("pretty_print.zig");
+    const compile_mod = @import("compile.zig");
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    try compile_mod.read_file(&buf, file_name);
+
+    print("--------- Attemping to parse file {s}: ---------\n{s}\n", .{ file_name, buf.items });
+
+    var tokeniser = Tokeniser{ .src = buf.items };
+    var token_list = try tokeniser.tokenise_all(allocator);
+
+    var parser = Parser.init(buf.items, token_list, allocator);
+    defer parser.deinit();
+
+    const root_id = try parse_root(&parser);
+    try pretty_print_mod.print_ast_start(&parser, root_id);
+}
+
+test "overall_1" {
+    try test_parser("tests/overall_1.anv");
 }
