@@ -108,6 +108,7 @@ pub const Token = struct {
     type: TokenType,
     start: SourceIndex,
 
+    pub const Index = u32;
     pub const List = std.MultiArrayList(Token);
 };
 

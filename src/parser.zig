@@ -24,7 +24,7 @@ pub const Node = union(enum) {
 
     // Specified return type, no parameters/deps
     fn_decl: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         ret_type: Index,
         block: Index,
     },
@@ -37,28 +37,28 @@ pub const Node = union(enum) {
     fn_decl_full: ExtraIndex,
 
     var_decl_type: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_type: Index,
     },
     var_decl_expr: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_expr: u32,
     },
     var_decl_full: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_type: Index,
         decl_expr: Index,
     },
     mut_var_decl_type: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_type: Index,
     },
     mut_var_decl_expr: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_expr: u32,
     },
     mut_var_decl_full: struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         decl_type: Index,
         decl_expr: Index,
     },
@@ -81,50 +81,50 @@ pub const Node = union(enum) {
     if_else_statement_capture: ExtraIndex,
 
     assignment: struct {
-        token: Parser.TokenIndex,
+        token: Token.Index,
         target: Index,
         expr: Index,
     },
 
     block: struct {
-        start_brace: Parser.TokenIndex,
+        start_brace: Token.Index,
         statements_start: Index,
         statements_end: Index,
     },
     block_one: struct {
-        start_brace: Parser.TokenIndex,
+        start_brace: Token.Index,
         statement: Index,
     },
     block_empty: struct {
-        start_brace: Parser.TokenIndex,
+        start_brace: Token.Index,
     },
 
     // TODO: Struct and enum definition nodes can both be extended
     // by a single field
     struct_definition: struct {
-        struct_keyword: Parser.TokenIndex,
+        struct_keyword: Token.Index,
         statements_start: Index,
         statements_end: Index,
     },
     struct_definition_one: struct {
-        struct_keyword: Parser.TokenIndex,
+        struct_keyword: Token.Index,
         statement: Index,
     },
     struct_definition_empty: struct {
-        struct_keyword: Parser.TokenIndex,
+        struct_keyword: Token.Index,
     },
 
     enum_definition: struct {
-        enum_keyword: Parser.TokenIndex,
+        enum_keyword: Token.Index,
         statements_start: Index,
         statements_end: Index,
     },
     enum_definition_one: struct {
-        enum_keyword: Parser.TokenIndex,
+        enum_keyword: Token.Index,
         statement: Index,
     },
     enum_definition_empty: struct {
-        enum_keyword: Parser.TokenIndex,
+        enum_keyword: Token.Index,
     },
 
     container_literal: struct {
@@ -140,7 +140,7 @@ pub const Node = union(enum) {
         target_type: Index,
     },
 
-    field_access: struct { target: Index, field_id: Parser.TokenIndex },
+    field_access: struct { target: Index, field_id: Token.Index },
 
     binary_exp: BinaryExp,
 
@@ -148,24 +148,24 @@ pub const Node = union(enum) {
 
     // Consider creating an explicit struct type for references
     ref: struct {
-        ref_tok: Parser.TokenIndex,
+        ref_tok: Token.Index,
         target: Index,
     },
     ref_cap: struct {
-        ref_tok: Parser.TokenIndex,
+        ref_tok: Token.Index,
         // May be mut or identifier
-        cap_tok: Parser.TokenIndex,
+        cap_tok: Token.Index,
         target: Index,
     },
 
     fn_call_empty: struct {
         target: Index,
-        start_paren: Parser.TokenIndex,
+        start_paren: Token.Index,
     },
     fn_call_single: struct {
         target: Index,
         arg: Index,
-        start_paren: Parser.TokenIndex,
+        start_paren: Token.Index,
     },
     fn_call_full: ExtraIndex,
 
@@ -174,12 +174,12 @@ pub const Node = union(enum) {
         token: Parser.TokenInfo,
     },
     // field_access: struct {
-    //     token: Parser.TokenIndex,
+    //     token: Token.Index,
     //     target: Index,
-    //     field_name: Parser.TokenIndex,
+    //     field_name: Token.Index,
     // },
-    identifier: Parser.TokenIndex,
-    integer_lit: Parser.TokenIndex,
+    identifier: Token.Index,
+    integer_lit: Token.Index,
 
     pub const Index = u32;
     pub const ExtraIndex = u32;
@@ -192,14 +192,14 @@ pub const Node = union(enum) {
 
     // Multiple parameters
     pub const FnDeclParams = packed struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         params: IndexSlice,
         ret_type: Index,
         block: Index,
     };
 
     pub const FnDeclFull = packed struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         params: IndexSlice,
         dependencies: Index,
         ret_type: Index,
@@ -209,7 +209,7 @@ pub const Node = union(enum) {
     // Dependencies and return type
     // TODO: Disallow this in the grammar? Seems useless...
     pub const FnDeclDepsType = packed struct {
-        identifier: Parser.TokenIndex,
+        identifier: Token.Index,
         params: IndexSlice,
         ret_type: Index,
         block: Index,
@@ -218,7 +218,7 @@ pub const Node = union(enum) {
     pub const FnCallFull = struct {
         target: Index,
         args: IndexSlice,
-        start_paren: Parser.TokenIndex,
+        start_paren: Token.Index,
     };
 
     pub const IfElseCapture = struct {
@@ -234,7 +234,7 @@ pub const Node = union(enum) {
     };
 
     pub const BinaryExp = struct {
-        op_tok: Parser.TokenIndex,
+        op_tok: Token.Index,
         lhs: Index,
         rhs: Index,
     };
@@ -259,7 +259,7 @@ pub const Ast = struct {
     allocator: std.mem.Allocator,
     root: Node.Index,
 
-    pub fn get_tok_str(a: *Ast, tok_index: Parser.TokenIndex) []const u8 {
+    pub fn get_tok_str(a: *Ast, tok_index: Token.Index) []const u8 {
         return token_to_str(a.tokens.get(tok_index), a.src);
     }
 
@@ -294,7 +294,7 @@ pub const Parser = struct {
 
     nodes: Node.List,
     tokens: Token.List = Token.List{},
-    cur_token: TokenIndex = 0,
+    cur_token: Token.Index = 0,
 
     // TODO: Make this a memory allocator instead.
     // Would need to figure out how to neatly store
@@ -305,13 +305,12 @@ pub const Parser = struct {
     // Scratch allocations must be freed after use, in effect making this a LIFO queue.
     scratch: NodeIndexList,
 
-    pub const TokenIndex = u32;
     pub const NodeIndex = u32;
     pub const NodeIndexList = std.ArrayList(NodeIndex);
 
     const TokenInfo = struct {
         type: TokenType,
-        index: TokenIndex,
+        index: Token.Index,
     };
 
     pub fn init(src: []const u8, tokens: Token.List, allocator: std.mem.Allocator) Parser {
@@ -570,7 +569,7 @@ fn parse_identifier(p: *Parser) ParseError!Node.Index {
     return p.append_node(node);
 }
 
-fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements: ?[]Node.Index, comptime tok_field: []const u8, tok: Parser.TokenIndex) ParseError!Node.Index {
+fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements: ?[]Node.Index, comptime tok_field: []const u8, tok: Token.Index) ParseError!Node.Index {
     var node: Node = undefined;
     if (statements) |*s| {
         if (s.len == 1) {
