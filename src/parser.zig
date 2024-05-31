@@ -351,7 +351,7 @@ pub const Parser = struct {
     fn next_token(p: *Parser) ParseError!TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            // print("Next {any} \n", .{tok});
+            print("Next {any} \n", .{tok});
             p.cur_token += 1;
             return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
         } else {
@@ -363,7 +363,7 @@ pub const Parser = struct {
         const tok = try p.next_token();
 
         if (tok.type != tok_type) {
-            // print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
+            print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
             return error.UnexpectedToken;
         } else {
             return tok;
@@ -373,7 +373,7 @@ pub const Parser = struct {
     fn peek_token(p: *Parser) !TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            // print("Peeked {any} \n", .{tok});
+            print("Peeked {any} \n", .{tok});
             return TokenInfo{ .type = tok.type, .index = p.cur_token };
         } else {
             return error.EarlyTermination;
@@ -400,6 +400,7 @@ pub const Parser = struct {
     }
 
     fn pop_scratch_to_extra(p: *Parser, count: usize) !Node.IndexSlice {
+        print("\nPopping {} to extra, scratch has length {} \n", .{ count, p.scratch.items.len });
         const elems = p.scratch.items[p.scratch.items.len - count ..];
 
         const start: u32 = @intCast(p.extra.items.len);
@@ -515,6 +516,7 @@ fn parse_var_decl_w_id(p: *Parser, id_tok: Parser.TokenInfo, is_mut: bool, compt
         type_expr = try parse_type_expr(p);
     }
 
+    peek = try p.peek_token();
     if (peek.type == .equal) {
         _ = p.next_token() catch undefined;
         expr = try parse_expr(p, 0);
@@ -585,6 +587,7 @@ fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements
             @field(@field(node, node_name), tok_field) = tok;
             // node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
         }
+        // print("\nPopping {} statements, scratch has length {} \n", .{ s.len, p.scratch.items.len });
     } else {
         @field(@field(node, node_name ++ "_empty"), tok_field) = tok;
     }
@@ -598,7 +601,8 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
     const statements = try parse_statements(p);
     // print("Parsed {any} statements\n", .{statements.?.len});
     const block_node = try create_statements_node(p, "block", statements, "start_brace", l_brace.index);
-
+    _ = try p.expect_token(.r_brace);
+    print("Finished parsing block\n", .{});
     return block_node;
 }
 
@@ -607,10 +611,16 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
     // TODO: Better error reporting regarding braces like in ember
     var peek_tok = try p.peek_token();
     var statements: ?[]Node.Index = null;
+    var statement_count: usize = 0;
     while (peek_tok.type != .r_brace) {
+        print("\nParsing statement starting with {}, scract at {}\n", .{ peek_tok.type, p.scratch.items.len });
         switch (peek_tok.type) {
             .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
-            .l_brace => try p.scratch.append(try parse_block(p)),
+            .l_brace => {
+                try p.scratch.append(try parse_block(p));
+                // pretty_print_mod.print_ast_start(p., p.scratch.getLast());
+
+            },
             // TODO: Variable-only keywords here can be used to start parsing for
             // a variable declaration unconditionally.
             .keyword_mut => {
@@ -624,7 +634,7 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                     const var_decl = try parse_var_decl_w_id(p, id_tok, false, false);
                     try p.scratch.append(var_decl);
                 } else {
-                    const id_node = Node{ .integer_lit = id_tok.index };
+                    const id_node = Node{ .identifier = id_tok.index };
                     const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
                     const assignment = try parse_assigment_w_target(p, target, true);
                     try p.scratch.append(assignment);
@@ -635,8 +645,9 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 
                 // IfStatement <- "if" Expr Capture? Block ("else" (IfStatement / Block))?
                 var prev_else_index: ?Node.Index = null;
+                var top_level_index: ?Node.Index = null;
                 while (true) {
-                    const if_tok = try p.next_token();
+                    const if_tok = try p.expect_token(.keyword_if);
                     _ = if_tok;
                     const expr = try parse_expr(p, 0);
 
@@ -659,26 +670,31 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 
                     const block = try parse_block(p);
 
+                    print("Checking potential else\n", .{});
                     // Potential else case
                     peek = try p.peek_token();
                     if (peek.type == .keyword_else) {
                         _ = try p.next_token();
+                        print("Else encountered\n", .{});
 
                         // Create an if-else node with the else case to be set as the subsequent block
                         // in the else case, and alternatively by the next iteration of the loop
-                        var index: Node.Index = undefined;
+                        var current_index: Node.Index = undefined;
                         if (capture) |cap_index| {
                             const extra = Node.IfElseCapture{ .condition = expr, .capture_ref = cap_index, .block = block, .else_block = undefined };
                             const e_index = try p.append_extra_struct(Node.IfElseCapture, extra);
-                            index = try p.append_node(Node{ .if_else_statement_capture = e_index });
+                            current_index = try p.append_node(Node{ .if_else_statement_capture = e_index });
                         } else {
                             const node = Node{ .if_else_statement = .{ .condition = expr, .block = block, .else_block = undefined } };
-                            index = try p.append_node(node);
+                            current_index = try p.append_node(node);
                         }
-                        try p.scratch.append(index);
 
                         if (prev_else_index) |else_index| {
-                            p.nodes.items[else_index].if_else_statement.else_block = index;
+                            p.nodes.items[else_index].if_else_statement.else_block = current_index;
+                        }
+
+                        if (top_level_index == null) {
+                            top_level_index = current_index;
                         }
 
                         peek = try p.peek_token();
@@ -686,12 +702,13 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                             .keyword_if => {
                                 // else-if. The node created on this iteration will have it's destination set by the next
                                 // iteration.
-                                prev_else_index = index;
+                                print("else if detected\n", .{});
+                                prev_else_index = current_index;
                             },
                             .l_brace => {
                                 // final else
                                 const else_block = try parse_block(p);
-                                p.nodes.items[index].if_else_statement.else_block = else_block;
+                                p.nodes.items[current_index].if_else_statement.else_block = else_block;
                                 break;
                             },
                             else => return error.UnexpectedToken,
@@ -703,29 +720,40 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                         } else {
                             node = Node{ .if_statement = .{ .condition = expr, .block = block } };
                         }
-                        const index = try p.append_node(node);
+                        const final_if_index = try p.append_node(node);
 
                         if (prev_else_index) |else_index| {
-                            p.nodes.items[else_index].if_else_statement.else_block = index;
+                            p.nodes.items[else_index].if_else_statement.else_block = final_if_index;
                         }
 
-                        try p.scratch.append(index);
+                        if (top_level_index == null) {
+                            top_level_index = final_if_index;
+                        }
                         break;
                     }
+                }
+
+                if (top_level_index) |top_level| {
+                    try p.scratch.append(top_level);
+                } else {
+                    unreachable;
                 }
             },
 
             else => return error.Unimplemented,
         }
 
+        statement_count += 1;
         if (statements) |*s| {
             s.len += 1;
         } else {
-            statements = p.scratch.items[p.scratch.items.len - 1 ..];
+            const start = p.scratch.items.len - 1;
+            statements = p.scratch.items[start .. start + statement_count];
         }
 
         peek_tok = p.peek_token() catch |err| if (err == error.EarlyTermination) break else return err;
     }
+    print("FINAL STATEMENT COUNT: {}\n", .{statement_count});
     return statements;
 }
 
