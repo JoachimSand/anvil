@@ -46,13 +46,13 @@ pub fn main() !void {
     // print("{any}\n", .{node_tag});
 
     var tokeniser = Tokeniser{ .src = input.items };
-    var token_list = try tokeniser.tokenise_all(allocator);
+    const token_list = try tokeniser.tokenise_all(allocator);
 
     var parser = Parser.init(input.items, token_list, allocator);
     defer parser.deinit();
 
     var ast = try parser.get_ast();
-    try pretty_print_mod.print_ast_start(&ast, ast.root);
+    try pretty_print_mod.print_ast_start(&ast);
 
     try air_mod.air_gen(&ast);
     // print("Root node {any}\n", .{parser.nodes.items[root_id]});

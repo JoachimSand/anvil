@@ -314,7 +314,7 @@ pub const Parser = struct {
     };
 
     pub fn init(src: []const u8, tokens: Token.List, allocator: std.mem.Allocator) Parser {
-        var parser = Parser{ .src = src, .allocator = allocator, .tokens = tokens, .nodes = Node.List.init(allocator), .extra = std.ArrayList(u32).init(allocator), .scratch = Parser.NodeIndexList.init(allocator) };
+        const parser = Parser{ .src = src, .allocator = allocator, .tokens = tokens, .nodes = Node.List.init(allocator), .extra = std.ArrayList(u32).init(allocator), .scratch = Parser.NodeIndexList.init(allocator) };
         return parser;
     }
 
@@ -1036,7 +1036,7 @@ fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     var lhs = try parse_prefix_expr(p);
     var maybe_op = try p.peek_token();
 
-    var cur_prec = start_prec;
+    const cur_prec = start_prec;
 
     while (operator_precedence(maybe_op.type)) |op_prec| {
         if (op_prec <= cur_prec) {
@@ -1069,15 +1069,27 @@ fn test_parser(file_name: []const u8) !void {
     print("--------- Attemping to parse file {s}: ---------\n{s}\n", .{ file_name, buf.items });
 
     var tokeniser = Tokeniser{ .src = buf.items };
-    var token_list = try tokeniser.tokenise_all(allocator);
+    const token_list = try tokeniser.tokenise_all(allocator);
 
     var parser = Parser.init(buf.items, token_list, allocator);
     defer parser.deinit();
 
-    const root_id = try parse_root(&parser);
-    try pretty_print_mod.print_ast_start(&parser, root_id);
+    var ast = try parser.get_ast();
+    try pretty_print_mod.print_ast_start(&ast);
 }
 
 test "overall_1" {
     try test_parser("tests/overall_1.anv");
+}
+
+test "if_else_0" {
+    try test_parser("tests/if_else_0.anv");
+}
+
+test "if_else_1" {
+    try test_parser("tests/if_else_0.anv");
+}
+
+test "bin_node_0" {
+    try test_parser("tests/bin_node_0.anv");
 }

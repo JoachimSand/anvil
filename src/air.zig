@@ -35,6 +35,8 @@ const pretty_print_mod = @import("pretty_print.zig");
 //     %8 = add(%1, %6)
 // }
 
+// LLVM has ways of operating directly on structs.
+
 // Some sort of updated mapping between identifiers and
 // instruction index that last wrote to it... Scopes.
 
@@ -254,6 +256,15 @@ const AirState = struct {
 
 fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
     // print("------------ Printing AIR ----------\n", .{});
+    // var res: u32 = 0;
+    comptime var one: u32 = 1;
+    const two = 2;
+    const res: u32 = one + two;
+    one = res;
+    // _ = res;
+    // const res2 = res;
+    // print("Res {s}\n", .{@typeName(@TypeOf(res))});
+
     var index: u32 = start;
     while (index < stop) {
         for (0..indent) |_| {
@@ -277,8 +288,8 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
                 print("br(%{}, %{}, %{})", .{ br.cond, br.then_blk, br.else_blk });
             },
             .block => |blk| {
-                print("block(%{}, %{}){{\n", .{ blk.start, blk.end });
-                try print_air(s, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end), indent + 1);
+                print("block(%{d}, %{d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
+                try print_air(s, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end) + 1, indent + 1);
                 index = @intFromEnum(blk.end);
 
                 for (0..indent) |_| {
@@ -337,29 +348,24 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
 }
 
 fn air_gen_block(s: *AirState, n_index: Node.Index) !AirInst.Index {
-    var statements_start: Node.ExtraIndex = undefined;
-    var statements_end: Node.ExtraIndex = undefined;
-
+    print("AIR gen for block {}\n", .{n_index});
+    var s_indeces: []const Node.Index = undefined;
     const node = s.ast.nodes.items[n_index];
     switch (node) {
         .root => |root| {
-            statements_start = root.statements_start;
-            statements_end = root.statements_end;
+            s_indeces = s.ast.extra.items[root.statements_start..root.statements_end];
         },
         .block => |block| {
-            statements_start = block.statements_start;
-            statements_end = block.statements_end;
+            s_indeces = s.ast.extra.items[block.statements_start..block.statements_end];
         },
-        .block_one => |block| {
-            statements_start = block.statement;
-            statements_end = block.statement + 1;
+        .block_one => |*block| {
+            s_indeces = (&block.statement)[0..1];
         },
         else => return error.Unimplemented,
     }
     const start_inst: AirInst.Index = @enumFromInt(s.instructions.len);
     const blk_inst = try s.append_inst(AirInst{ .block = .{ .start = undefined, .end = undefined } });
 
-    const s_indeces = s.ast.extra.items[statements_start..statements_end];
     for (s_indeces) |s_index| {
         const statement = s.ast.nodes.items[s_index];
         print("AIR gen for statement {}\n", .{statement});

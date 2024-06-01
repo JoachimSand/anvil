@@ -1,6 +1,22 @@
 # Anvil
 A WIP compiler for the anvil language.
 
+## Semantics of comptime
+
+Any parameters to a function are considered run-time if not annotated with comptime.
+
+Local parameters are by default "comptime", unless they at some are potentially assigned to a run-time variable.
+Immutable variables are set to either comptime or runtime solely based on their initialization.
+Mutable variables may initially be comptime, but later become run-time if assigned to another run-time variable/parameter.
+To force comptime on a mutable variable, potentially allow comptime in front.
+
+Val: Comptime value. Type is unknown. E.g. 32
+TypedVal: Comptime value with known type. E.g. 32 with type u8
+
+Type: Comptime type. E.g. u8 , [5]bool
+TypeVal
+
+
 ## Todo
 ### Standard
 -while-loops

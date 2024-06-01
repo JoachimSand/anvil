@@ -263,9 +263,9 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
     }
 }
 
-pub fn print_ast_start(p: *Ast, root_id: Parser.NodeIndex) !void {
+pub fn print_ast_start(p: *Ast) !void {
     var prefix = std.ArrayList(u8).init(p.allocator);
     defer prefix.deinit();
 
-    try print_ast(p, &prefix, true, root_id);
+    try print_ast(p, &prefix, true, p.root);
 }
