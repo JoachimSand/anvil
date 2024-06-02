@@ -39,7 +39,7 @@ pub fn main() !void {
         try stdin.streamUntilDelimiter(input.writer(), '\n', null);
         print("Got input {s} with length {} \n", .{ input.items, input.items.len });
     } else {
-        try compile_mod.read_file(&input, "tests/if_else_0.anv");
+        try compile_mod.read_file(&input, "tests/bin_node_0.anv");
     }
 
     // const node_tag = NodeTag{ .param_list = .{ .hello = 10 } };

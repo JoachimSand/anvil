@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
 const tokeniser_mod = @import("tokeniser.zig");
@@ -35,6 +36,35 @@ const pretty_print_mod = @import("pretty_print.zig");
 //     %8 = add(%1, %6)
 // }
 
+// BinNode := struct {
+// 	a : u32;
+// 	b : u32;
+// };
+// %1 = struct(a : Ref.u32, b : Ref.u32)
+
+// my_type := i32;
+// BinNode := struct {
+// 	a : my_type;
+// 	b : u32;
+// };
+// %1 = Ref.i32
+// %2 = struct(a : %1, b : Ref.u32)
+
+// Node := struct { c : bool};
+// BinNode := struct {
+// 	a : Node;
+// 	b : u32;
+// };
+// %1 = struct(c : Ref.bool)
+// %2 = struct(a : %1, b : Ref.u32)
+
+// BinNode := struct {
+// 	a : struct { c : bool};
+// 	b : u32;
+// };
+// %1 = struct { c : bool};
+// %2 = struct(a : %1, b : Ref.u32)
+
 // LLVM has ways of operating directly on structs.
 
 // Some sort of updated mapping between identifiers and
@@ -47,19 +77,28 @@ const AirInst = union(enum) {
         true_lit,
         false_lit,
         i8,
+        i16,
+        i32,
+        i64,
 
+        u8,
+        u16,
+        u32,
+        u64,
         _,
     };
     const List = std.MultiArrayList(AirInst);
+    const FieldInfo = packed struct {
+        var_name: AirState.StringIndex,
+        type_inst: Index,
+        mutable: bool,
+    };
 
-    // const BlockInfo = struct { start_inst: AirInst.Index, end_inst: AirInst.Index };
-
-    const Br = struct {
+    const Br = packed struct {
         cond: Index,
         then_blk: Index,
         else_blk: Index,
     };
-
     int: u64,
     add: struct {
         lhs: Index,
@@ -86,7 +125,10 @@ const AirInst = union(enum) {
         type: Index,
         expr: Index,
     },
-
+    struct_def: struct {
+        start: AirState.ExtraIndex,
+        end: AirState.ExtraIndex,
+    },
     br: AirState.ExtraIndex,
 };
 
@@ -95,6 +137,13 @@ const PrimitiveIdMap = std.ComptimeStringMap(AirInst.Index, .{
     .{ "true", AirInst.Index.true_lit },
     .{ "false", AirInst.Index.false_lit },
     .{ "i8", AirInst.Index.i8 },
+    .{ "i16", AirInst.Index.i16 },
+    .{ "i32", AirInst.Index.i32 },
+    .{ "i64", AirInst.Index.i64 },
+    .{ "u8", AirInst.Index.u8 },
+    .{ "u16", AirInst.Index.u16 },
+    .{ "u32", AirInst.Index.u32 },
+    .{ "u64", AirInst.Index.u64 },
     // .{ "enum", .keyword_enum },
     // .{ "if", .keyword_if },
     // .{ "else", .keyword_else },
@@ -114,12 +163,17 @@ const Scope = union(enum) {
     top: IdentifierMap,
 };
 
+const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar };
+
+pub const AirError = AirSpecificError || Allocator.Error || std.fmt.ParseIntError;
+
 const AirState = struct {
     instructions: AirInst.List,
     extra: ExtraList,
+    scratch: std.ArrayList(AirInst.Index),
 
     string_index_map: std.StringHashMap(StringIndex),
-    string_len_map: std.StringHashMap(StringLen),
+    string_len_map: std.AutoHashMap(StringIndex, StringLen),
     strings: std.ArrayList(u8),
 
     scopes: ScopeList,
@@ -133,13 +187,13 @@ const AirState = struct {
     pub const StringIndex = u32;
     pub const ScopeList = std.ArrayList(Scope);
 
-    fn intern_token(a: *AirState, index: Token.Index) !StringIndex {
+    fn intern_token(a: *AirState, index: Token.Index) Allocator.Error!StringIndex {
         const tok = a.ast.tokens.get(index);
         const var_str = tokeniser_mod.token_to_str(tok, a.ast.src);
         return a.intern_string(var_str);
     }
 
-    fn intern_string(a: *AirState, str: []const u8) !StringIndex {
+    fn intern_string(a: *AirState, str: []const u8) Allocator.Error!StringIndex {
         const maybe_index = a.string_index_map.get(str);
 
         if (maybe_index) |index| {
@@ -148,17 +202,17 @@ const AirState = struct {
             const index: StringIndex = @intCast(a.strings.items.len);
             try a.strings.appendSlice(str);
             try a.string_index_map.put(str, index);
-            try a.string_len_map.put(str, @intCast(str.len));
+            try a.string_len_map.put(index, @intCast(str.len));
             return index;
         }
     }
 
     fn get_string(s: *AirState, index: StringIndex) []const u8 {
-        const len = s.string_lengths[index];
+        const len = s.string_len_map.get(index).?;
         return s.strings.items[index .. index + len];
     }
 
-    fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.Index) !void {
+    fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.Index) AirError!void {
         const str_index = try intern_token(s, var_tok);
 
         print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
@@ -172,7 +226,7 @@ const AirState = struct {
         }
     }
 
-    fn get_var(s: *AirState, var_tok: Token.Index) !*Scope.IdentifierInfo {
+    fn get_var(s: *AirState, var_tok: Token.Index) AirError!*Scope.IdentifierInfo {
         const str_index = try intern_token(s, var_tok);
         var scope_i = s.scopes.items.len;
         while (scope_i > 0) {
@@ -191,7 +245,7 @@ const AirState = struct {
         return error.UndefinedVar;
     }
 
-    fn append_extra_struct(s: *AirState, comptime s_typ: type, val: s_typ) !ExtraIndex {
+    fn append_extra_struct(s: *AirState, comptime s_typ: type, val: s_typ) Allocator.Error!ExtraIndex {
         const type_info = comptime @typeInfo(s_typ);
         if (type_info == .Struct) {
             const s_info = comptime type_info.Struct;
@@ -200,6 +254,12 @@ const AirState = struct {
                 if (field.type == AirInst.Index) {
                     const field_val = @field(val, field.name);
                     try s.extra.append(@intFromEnum(field_val));
+                } else if (field.type == u32) {
+                    const field_val = @field(val, field.name);
+                    try s.extra.append(field_val);
+                } else if (field.type == bool) {
+                    const field_val = @field(val, field.name);
+                    try s.extra.append(@intFromBool(field_val));
                 } else {
                     _ = try s.append_extra_struct(field.type, @field(val, field.name));
                 }
@@ -218,12 +278,18 @@ const AirState = struct {
 
             comptime var offset = 0;
             inline for (s_info.fields) |field| {
+                var field_val = a.extra.items[extra_index + offset];
                 if (field.type == AirInst.Index) {
-                    const field_val = a.extra.items[extra_index + offset];
                     @field(s, field.name) = @enumFromInt(field_val);
                     offset += 1;
+                } else if (field.type == u32) {
+                    @field(s, field.name) = field_val;
+                    offset += 1;
+                } else if (field.type == bool) {
+                    @field(s, field.name) = (field_val != 0);
+                    offset += 1;
                 } else {
-                    const field_val = a.get_extra_struct(field.type, extra_index + offset);
+                    field_val = a.get_extra_struct(field.type, extra_index + offset);
                     @field(s, field.name) = field_val;
                     offset += @typeInfo(field.type).Struct.fields.len;
                 }
@@ -242,6 +308,9 @@ const AirState = struct {
     fn deinit(s: *AirState) void {
         s.instructions.deinit(s.allocator);
         s.extra.deinit();
+        std.debug.assert(s.scratch.items.len == 0);
+        s.scratch.deinit();
+
         s.string_index_map.deinit();
         s.string_len_map.deinit();
         s.strings.deinit();
@@ -257,13 +326,10 @@ const AirState = struct {
 fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
     // print("------------ Printing AIR ----------\n", .{});
     // var res: u32 = 0;
-    comptime var one: u32 = 1;
-    const two = 2;
-    const res: u32 = one + two;
-    one = res;
     // _ = res;
     // const res2 = res;
     // print("Res {s}\n", .{@typeName(@TypeOf(res))});
+    // print("Instruction count : {}\n", .{s.instructions.len});
 
     var index: u32 = start;
     while (index < stop) {
@@ -297,6 +363,19 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
                 }
                 print("}}", .{});
             },
+            .struct_def => |def| {
+                print("struct def(", .{});
+                const type_info = @typeInfo(AirInst.FieldInfo);
+                const field_count: AirState.ExtraIndex = @intCast(type_info.Struct.fields.len);
+                var extra = def.start;
+                while (extra <= def.end) {
+                    const field_info = s.get_extra_struct(AirInst.FieldInfo, extra);
+                    const var_name = s.get_string(field_info.var_name);
+                    print("{s} : %{}, ", .{ var_name, field_info.type_inst });
+
+                    extra += field_count;
+                }
+            },
             else => return error.Unimplemented,
         }
         print(";\n", .{});
@@ -304,9 +383,32 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
     }
 }
 
-fn air_gen_expr(s: *AirState, index: Node.Index) !AirInst.Index {
+fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.Index {
     const cur_node = s.ast.nodes.items[index];
     switch (cur_node) {
+        .struct_definition => |s_def| {
+            const d_indeces = s.ast.extra.items[s_def.statements_start..s_def.statements_end];
+            // const d = AirInst { .struct_def = }
+            const start_extra: AirState.ExtraIndex = @intCast(s.extra.items.len);
+            var end_extra: AirState.ExtraIndex = undefined;
+            for (d_indeces) |d_index| {
+                const decl = s.ast.nodes.items[d_index];
+                switch (decl) {
+                    .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
+                    .var_decl_type => |type_decl| {
+                        const decl_name = try s.intern_token(type_decl.identifier);
+                        const type_inst = try air_gen_expr(s, type_decl.decl_type);
+                        const field_info = AirInst.FieldInfo{ .var_name = decl_name, .mutable = false, .type_inst = type_inst };
+                        const extra_index = try s.append_extra_struct(AirInst.FieldInfo, field_info);
+                        end_extra = extra_index;
+                    },
+                    .mut_var_decl_type => return error.Unimplemented,
+                    else => unreachable,
+                }
+            }
+            const inst = AirInst{ .struct_def = .{ .start = start_extra, .end = end_extra } };
+            return s.append_inst(inst);
+        },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
             const lhs_index = try air_gen_expr(s, bin_exp.lhs);
@@ -322,6 +424,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index) !AirInst.Index {
         },
         .identifier => |tok_index| {
             const id_str = s.ast.get_tok_str(tok_index);
+            print("Id str {s}\n", .{id_str});
             if (PrimitiveIdMap.get(id_str)) |prim_index| {
                 return prim_index;
             }
@@ -347,25 +450,7 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
     try s.push_var(id, mutable, inst);
 }
 
-fn air_gen_block(s: *AirState, n_index: Node.Index) !AirInst.Index {
-    print("AIR gen for block {}\n", .{n_index});
-    var s_indeces: []const Node.Index = undefined;
-    const node = s.ast.nodes.items[n_index];
-    switch (node) {
-        .root => |root| {
-            s_indeces = s.ast.extra.items[root.statements_start..root.statements_end];
-        },
-        .block => |block| {
-            s_indeces = s.ast.extra.items[block.statements_start..block.statements_end];
-        },
-        .block_one => |*block| {
-            s_indeces = (&block.statement)[0..1];
-        },
-        else => return error.Unimplemented,
-    }
-    const start_inst: AirInst.Index = @enumFromInt(s.instructions.len);
-    const blk_inst = try s.append_inst(AirInst{ .block = .{ .start = undefined, .end = undefined } });
-
+fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void {
     for (s_indeces) |s_index| {
         const statement = s.ast.nodes.items[s_index];
         print("AIR gen for statement {}\n", .{statement});
@@ -425,6 +510,27 @@ fn air_gen_block(s: *AirState, n_index: Node.Index) !AirInst.Index {
             },
         }
     }
+}
+
+fn air_gen_block(s: *AirState, n_index: Node.Index) !AirInst.Index {
+    print("AIR gen for block {}\n", .{n_index});
+    var s_indeces: []const Node.Index = undefined;
+    const node = s.ast.nodes.items[n_index];
+    switch (node) {
+        .root => |root| {
+            s_indeces = s.ast.extra.items[root.statements_start..root.statements_end];
+        },
+        .block => |block| {
+            s_indeces = s.ast.extra.items[block.statements_start..block.statements_end];
+        },
+        .block_one => |*block| {
+            s_indeces = (&block.statement)[0..1];
+        },
+        else => return error.Unimplemented,
+    }
+    const start_inst: AirInst.Index = @enumFromInt(s.instructions.len);
+    const blk_inst = try s.append_inst(AirInst{ .block = .{ .start = undefined, .end = undefined } });
+    _ = try air_gen_statements(s, s_indeces);
     const end_inst: AirInst.Index = @enumFromInt(s.instructions.len - 1);
     s.instructions.set(@intFromEnum(blk_inst), AirInst{ .block = .{ .start = start_inst, .end = end_inst } });
 
@@ -435,10 +541,12 @@ pub fn air_gen(ast: *Ast) !void {
     var s = AirState{
         .instructions = AirInst.List{},
         .extra = AirState.ExtraList.init(ast.allocator),
+        .scratch = std.ArrayList(AirInst.Index).init(ast.allocator),
+
         .scopes = AirState.ScopeList.init(ast.allocator),
 
         .string_index_map = std.StringHashMap(AirState.StringIndex).init(ast.allocator),
-        .string_len_map = std.StringHashMap(AirState.StringLen).init(ast.allocator),
+        .string_len_map = std.AutoHashMap(AirState.StringIndex, AirState.StringLen).init(ast.allocator),
         .strings = std.ArrayList(u8).init(ast.allocator),
 
         .ast = ast,
