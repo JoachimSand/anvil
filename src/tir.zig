@@ -20,23 +20,47 @@ const print = std.debug.print;
 // %2 = constant(type, struct {a : u32, b : u32});
 // %3 = constant(struct { a : u32, b : u32}, )
 
+// Represents a compile-time known type
 const Type = union(enum) {
     const Index = u32;
-    typ,
     boolean,
     int_u64,
     int_u32,
-    strct: []Type,
-    array: *Type,
+    int_u16,
+    int_u8,
+    int_i64,
+    int_i32,
+    int_i16,
+    int_i8,
+    type_struct: []Type,
+    // strct: []Type,
+    // array: *Type,
+};
+
+//Compile-time known values.
+const Value = union(enum) {
+    const Index = u32;
+    unknown_int: i64,
+    u64: u64,
+    u32: u32,
+    u16: u16,
+    u8: u8,
+    i64: i64,
+    i32: i32,
+    i16: i16,
+    i8: i8,
+    boolean: bool,
 };
 
 // Typed intermediate representation
 const TirInst = union(enum) {
     const Index = u32;
 
-    constant: struct {
-        typ: Type,
-        val: Value.Index,
+    constant_val: struct {
+        val: Value,
+    },
+    constant_type: struct {
+        ty: Type,
     },
     add: struct {
         lhs: Index,
@@ -44,12 +68,7 @@ const TirInst = union(enum) {
     },
 };
 
-const Value = union(enum) {
-    const Index = u32;
-    int_u64: u64,
-    boolean: bool,
-    typ: Type,
-};
+//
 
 const TirState = struct {
     instructions: std.MultiArrayList(TirInst),

@@ -1,5 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
+const Allocator = std.mem.Allocator;
 
 const tokeniser_mod = @import("tokeniser.zig");
 const Tokeniser = tokeniser_mod.Tokeniser;
@@ -10,7 +11,7 @@ const Parser = parser_mod.Parser;
 const Ast = parser_mod.Ast;
 const ParseError = parser_mod.ParseError;
 
-fn print_ast_prefix(prefix: *std.ArrayList(u8), is_last: bool) !usize {
+fn print_ast_prefix(prefix: *std.ArrayList(u8), is_last: bool) PrettyPrintError!usize {
     print("{s}", .{prefix.items});
     var indent_str: []const u8 = "";
     if (is_last) {
@@ -40,7 +41,9 @@ fn print_ast_slice(
     }
 }
 
-fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parser.NodeIndex) ParseError!void {
+const PrettyPrintError = Allocator.Error || error{Unimplemented};
+
+fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parser.NodeIndex) PrettyPrintError!void {
     // print("At node {any} ", .{cur_node});
     const indent_len = try print_ast_prefix(prefix, is_last);
     defer prefix.items.len -= indent_len;
@@ -263,9 +266,9 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
     }
 }
 
-pub fn print_ast_start(p: *Ast) !void {
+pub fn print_ast_start(p: *Ast, root: Node.Index) PrettyPrintError!void {
     var prefix = std.ArrayList(u8).init(p.allocator);
     defer prefix.deinit();
 
-    try print_ast(p, &prefix, true, p.root);
+    try print_ast(p, &prefix, true, root);
 }

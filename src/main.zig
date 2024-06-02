@@ -28,8 +28,10 @@ pub fn main() !void {
 
     var read_from_stdin = true;
     var args = std.process.args();
+    var file_name: [:0]const u8 = undefined;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-f", arg)) {
+            file_name = args.next().?;
             read_from_stdin = false;
         }
     }
@@ -39,7 +41,7 @@ pub fn main() !void {
         try stdin.streamUntilDelimiter(input.writer(), '\n', null);
         print("Got input {s} with length {} \n", .{ input.items, input.items.len });
     } else {
-        try compile_mod.read_file(&input, "tests/bin_node_0.anv");
+        try compile_mod.read_file(&input, file_name);
     }
 
     // const node_tag = NodeTag{ .param_list = .{ .hello = 10 } };
@@ -52,7 +54,7 @@ pub fn main() !void {
     defer parser.deinit();
 
     var ast = try parser.get_ast();
-    try pretty_print_mod.print_ast_start(&ast);
+    try pretty_print_mod.print_ast_start(&ast, ast.root);
 
     try air_mod.air_gen(&ast);
     // print("Root node {any}\n", .{parser.nodes.items[root_id]});

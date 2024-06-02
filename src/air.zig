@@ -325,10 +325,6 @@ const AirState = struct {
 
 fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
     // print("------------ Printing AIR ----------\n", .{});
-    // var res: u32 = 0;
-    // _ = res;
-    // const res2 = res;
-    // print("Res {s}\n", .{@typeName(@TypeOf(res))});
     // print("Instruction count : {}\n", .{s.instructions.len});
 
     var index: u32 = start;
@@ -375,6 +371,7 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
 
                     extra += field_count;
                 }
+                print(")", .{});
             },
             else => return error.Unimplemented,
         }
@@ -383,31 +380,38 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
     }
 }
 
+fn air_gen_struct_def(s: *AirState, d_indeces: []const Node.Index) AirError!AirInst.Index {
+    const start_extra: AirState.ExtraIndex = @intCast(s.extra.items.len);
+    var end_extra: AirState.ExtraIndex = undefined;
+    for (d_indeces) |d_index| {
+        const decl = s.ast.nodes.items[d_index];
+        switch (decl) {
+            .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
+            .var_decl_type => |type_decl| {
+                const decl_name = try s.intern_token(type_decl.identifier);
+                const type_inst = try air_gen_expr(s, type_decl.decl_type);
+                const field_info = AirInst.FieldInfo{ .var_name = decl_name, .mutable = false, .type_inst = type_inst };
+                const extra_index = try s.append_extra_struct(AirInst.FieldInfo, field_info);
+                end_extra = extra_index;
+            },
+            .mut_var_decl_type => return error.Unimplemented,
+            else => unreachable,
+        }
+    }
+    const inst = AirInst{ .struct_def = .{ .start = start_extra, .end = end_extra } };
+    return s.append_inst(inst);
+}
+
 fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.Index {
     const cur_node = s.ast.nodes.items[index];
     switch (cur_node) {
+        .struct_definition_one => |s_def| {
+            const d_indeces: []const Node.Index = (&s_def.statement)[0..1];
+            return air_gen_struct_def(s, d_indeces);
+        },
         .struct_definition => |s_def| {
             const d_indeces = s.ast.extra.items[s_def.statements_start..s_def.statements_end];
-            // const d = AirInst { .struct_def = }
-            const start_extra: AirState.ExtraIndex = @intCast(s.extra.items.len);
-            var end_extra: AirState.ExtraIndex = undefined;
-            for (d_indeces) |d_index| {
-                const decl = s.ast.nodes.items[d_index];
-                switch (decl) {
-                    .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
-                    .var_decl_type => |type_decl| {
-                        const decl_name = try s.intern_token(type_decl.identifier);
-                        const type_inst = try air_gen_expr(s, type_decl.decl_type);
-                        const field_info = AirInst.FieldInfo{ .var_name = decl_name, .mutable = false, .type_inst = type_inst };
-                        const extra_index = try s.append_extra_struct(AirInst.FieldInfo, field_info);
-                        end_extra = extra_index;
-                    },
-                    .mut_var_decl_type => return error.Unimplemented,
-                    else => unreachable,
-                }
-            }
-            const inst = AirInst{ .struct_def = .{ .start = start_extra, .end = end_extra } };
-            return s.append_inst(inst);
+            return air_gen_struct_def(s, d_indeces);
         },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
@@ -437,7 +441,11 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.Index {
             const inst = AirInst{ .int = int_val };
             return s.append_inst(inst);
         },
-        else => return error.Unimplemented,
+        else => {
+            print("AIR generatio for the following node is unimplemented: \n", .{});
+            try pretty_print_mod.print_ast_start(s.ast, index);
+            return error.Unimplemented;
+        },
     }
 }
 
