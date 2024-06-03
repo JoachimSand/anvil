@@ -140,6 +140,9 @@ pub const AirInst = union(enum) {
         rhs: IndexRef,
     },
     // Access an argument to the function
+    // TODO: Make this an extra argument and also
+    // specify it's type here. Delete declinfo for functions?.
+    // FunctionDef could refer to start and end of args instead.
     arg: AirState.StringIndex,
     int: u64,
 };
