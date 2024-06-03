@@ -12,6 +12,7 @@ const pretty_print_mod = @import("pretty_print.zig");
 const compile_mod = @import("compile.zig");
 
 const air_mod = @import("air.zig");
+const tir_mod = @import("tir.zig");
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
@@ -51,12 +52,16 @@ pub fn main() !void {
     const token_list = try tokeniser.tokenise_all(allocator);
 
     var parser = Parser.init(input.items, token_list, allocator);
-    defer parser.deinit();
 
     var ast = try parser.get_ast();
     try pretty_print_mod.print_ast_start(&ast, ast.root);
 
-    try air_mod.air_gen(&ast);
+    var air = try air_mod.air_gen(&ast);
+    defer air.deinit();
+    // We can now free the parser contents: tokens, nodes etc.
+    parser.deinit();
+
+    // _ = try tir_mod.tir_gen(air, air.allocator);
     // print("Root node {any}\n", .{parser.nodes.items[root_id]});
     // // stdout is for the actual output of your application, for example if you
     // // are implementing gzip, then only the compressed bytes should be sent to

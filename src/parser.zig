@@ -259,6 +259,12 @@ pub const Ast = struct {
     allocator: std.mem.Allocator,
     root: Node.Index,
 
+    pub fn deinit(a: *Ast) void {
+        a.nodes.deinit();
+        a.extra.deinit();
+        a.tokens.deinit(a.allocator);
+    }
+
     pub fn get_tok_str(a: *Ast, tok_index: Token.Index) []const u8 {
         return token_to_str(a.tokens.get(tok_index), a.src);
     }
@@ -458,7 +464,7 @@ pub fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     _ = try p.expect_token(.minus_arrow);
 
     const type_expr = try parse_type_expr(p);
-    // print("Parsed type expr \n", .{});
+    print("Parsed type expr \n", .{});
     const block = try parse_block(p);
 
     var node: Node = undefined;
@@ -487,7 +493,7 @@ fn parse_var_decl_or_param(p: *Parser, comptime is_param_decl: bool) ParseError!
         },
         .identifier => {
             const id_tok = try p.expect_token(.identifier);
-            return parse_var_decl_w_id(p, id_tok, true, is_param_decl);
+            return parse_var_decl_w_id(p, id_tok, false, is_param_decl);
         },
         else => return error.UnexpectedToken,
     }
