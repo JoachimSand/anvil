@@ -86,15 +86,16 @@ pub const AirInst = union(enum) {
         u16,
         u32,
         u64,
+        type,
         _,
     };
     const List = std.MultiArrayList(AirInst);
     const ExtraSlice = packed struct {
-        start: AirState.ExtraIndex,
-        end: AirState.ExtraIndex,
+        start: Air.ExtraIndex,
+        end: Air.ExtraIndex,
     };
     const DeclInfo = packed struct {
-        var_name: AirState.StringIndex,
+        var_name: Air.StringIndex,
         type_inst: IndexRef,
         mutable: bool,
     };
@@ -104,25 +105,27 @@ pub const AirInst = union(enum) {
         else_blk: IndexRef,
     };
     const FnDef = packed struct {
-        name: AirState.StringIndex,
+        name: Air.StringIndex,
         params: ExtraSlice,
         ret_type: IndexRef,
+        blk: IndexRef,
     };
-    fn_def: AirState.ExtraIndex,
+    fn_def: Air.ExtraIndex,
     struct_def: struct {
-        start: AirState.ExtraIndex,
-        end: AirState.ExtraIndex,
+        start: Air.ExtraIndex,
+        end: Air.ExtraIndex,
     },
 
     block: struct {
         start: IndexRef,
         end: IndexRef,
     },
-    br: AirState.ExtraIndex,
+    br: Air.ExtraIndex,
     type_as: struct {
         type: IndexRef,
         expr: IndexRef,
     },
+    type_of: IndexRef,
     add: struct {
         lhs: IndexRef,
         rhs: IndexRef,
@@ -143,7 +146,7 @@ pub const AirInst = union(enum) {
     // TODO: Make this an extra argument and also
     // specify it's type here. Delete declinfo for functions?.
     // FunctionDef could refer to start and end of args instead.
-    arg: AirState.StringIndex,
+    arg: struct { name: Air.StringIndex, type: IndexRef },
     int: u64,
 };
 
@@ -159,6 +162,7 @@ const PrimitiveIdMap = std.ComptimeStringMap(AirInst.IndexRef, .{
     .{ "u16", AirInst.IndexRef.u16 },
     .{ "u32", AirInst.IndexRef.u32 },
     .{ "u64", AirInst.IndexRef.u64 },
+    .{ "type", AirInst.IndexRef.type },
     // .{ "enum", .keyword_enum },
     // .{ "if", .keyword_if },
     // .{ "else", .keyword_else },
@@ -173,8 +177,9 @@ const Scope = union(enum) {
         mutable: bool,
         // Index of Air inst that last wrote to the identifier
         inst: AirInst.IndexRef,
+        type_inst: AirInst.IndexRef,
     };
-    const IdentifierMap = std.AutoHashMap(AirState.StringIndex, IdentifierInfo);
+    const IdentifierMap = std.AutoHashMap(Air.StringIndex, IdentifierInfo);
     top: IdentifierMap,
     // func_params: struct { params: IdentifierMap, block: IdentifierMap },
 };
@@ -185,13 +190,18 @@ pub const AirError = AirSpecificError || Allocator.Error || std.fmt.ParseIntErro
 
 pub const Air = struct {
     instructions: AirInst.List,
-    extra: AirState.ExtraList,
+    extra: ExtraList,
 
-    string_index_map: std.StringHashMap(AirState.StringIndex),
-    string_len_map: std.AutoHashMap(AirState.StringIndex, AirState.StringLen),
+    string_index_map: std.StringHashMap(StringIndex),
+    string_len_map: std.AutoHashMap(StringIndex, StringLen),
     strings: std.ArrayList(u8),
 
     allocator: std.mem.Allocator,
+
+    pub const ExtraIndex = u32;
+    pub const ExtraList = std.ArrayList(u32);
+    pub const StringLen = u32;
+    pub const StringIndex = u32;
 
     pub fn deinit(air: *Air) void {
         air.instructions.deinit(air.allocator);
@@ -201,47 +211,8 @@ pub const Air = struct {
         air.string_len_map.deinit();
         air.strings.deinit();
     }
-};
 
-pub const AirState = struct {
-    instructions: AirInst.List,
-    extra: ExtraList,
-    scratch: std.ArrayList(u32),
-
-    string_index_map: std.StringHashMap(StringIndex),
-    string_len_map: std.AutoHashMap(StringIndex, StringLen),
-    strings: std.ArrayList(u8),
-
-    scopes: ScopeList,
-    ast: *Ast,
-
-    allocator: std.mem.Allocator,
-
-    pub const ExtraIndex = u32;
-    pub const ExtraList = std.ArrayList(u32);
-    pub const StringLen = u32;
-    pub const StringIndex = u32;
-    pub const ScopeList = std.ArrayList(Scope);
-
-    fn get_air(a: *AirState) Air {
-        return Air{
-            .instructions = a.instructions,
-            .extra = a.extra,
-            .string_index_map = a.string_index_map,
-            .string_len_map = a.string_len_map,
-            .strings = a.strings,
-
-            .allocator = a.allocator,
-        };
-    }
-
-    fn intern_token(a: *AirState, index: Token.Index) Allocator.Error!StringIndex {
-        const tok = a.ast.tokens.get(index);
-        const var_str = tokeniser_mod.token_to_str(tok, a.ast.src);
-        return a.intern_string(var_str);
-    }
-
-    fn intern_string(a: *AirState, str: []const u8) Allocator.Error!StringIndex {
+    fn intern_string(a: *Air, str: []const u8) Allocator.Error!StringIndex {
         const maybe_index = a.string_index_map.get(str);
 
         if (maybe_index) |index| {
@@ -255,83 +226,28 @@ pub const AirState = struct {
         }
     }
 
-    fn get_string(s: *AirState, index: StringIndex) []const u8 {
-        const len = s.string_len_map.get(index).?;
-        return s.strings.items[index .. index + len];
+    fn get_string(a: *Air, index: StringIndex) []const u8 {
+        const len = a.string_len_map.get(index).?;
+        return a.strings.items[index .. index + len];
     }
 
-    fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.IndexRef) AirError!void {
-        const str_index = try intern_token(s, var_tok);
-
-        print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
-        switch (s.scopes.items[s.scopes.items.len - 1]) {
-            .top => |*top| {
-                if (top.get(str_index)) |_| {
-                    return error.Shadowing;
-                }
-                try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
-            },
-            // .func_params => |*func_scope| {
-            //     const param_scope = func_scope.params;
-            //     const blk_scope = func_scope.block;
-            //     if (param_scope.get(str_index)) |_| {
-            //         return error.Shadowing;
-            //     }
-            //     if (blk_scope.get(str_index)) |_| {
-            //         return error.Shadowing;
-            //     }
-            //     try func_scope.block.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
-            // },
-        }
-    }
-
-    fn get_var(s: *AirState, var_tok: Token.Index) AirError!*Scope.IdentifierInfo {
-        const str_index = try intern_token(s, var_tok);
-        var scope_i = s.scopes.items.len;
-        while (scope_i > 0) {
-            scope_i -= 1;
-            const scope = s.scopes.items[scope_i];
-            switch (scope) {
-                .top => |*top| {
-                    if (top.getPtr(str_index)) |info| {
-                        return info;
-                    }
-                    // try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
-                },
-                // .func_params => |*func_scope| {
-                //     const param_scope = func_scope.params;
-                //     const blk_scope = func_scope.block;
-                //     if (param_scope.getPtr(str_index)) |info| {
-                //         return info;
-                //     }
-                //     if (blk_scope.getPtr(str_index)) |info| {
-                //         return info;
-                //     }
-                //     // try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
-                // },
-            }
-        }
-        print("Undefined identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
-        return error.UndefinedVar;
-    }
-
-    fn append_struct(s: *AirState, comptime extra_or_scratch: []const u8, comptime s_typ: type, val: s_typ) Allocator.Error!ExtraIndex {
+    fn append_extra_struct(a: *Air, comptime s_typ: type, val: s_typ) Allocator.Error!Air.ExtraIndex {
         const type_info = comptime @typeInfo(s_typ);
         if (type_info == .Struct) {
             const s_info = comptime type_info.Struct;
-            const index = s.extra.items.len;
+            const index = a.extra.items.len;
             inline for (s_info.fields) |field| {
                 if (field.type == AirInst.IndexRef) {
                     const field_val = @field(val, field.name);
-                    try @field(s, extra_or_scratch).append(@intFromEnum(field_val));
+                    try a.extra.append(@intFromEnum(field_val));
                 } else if (field.type == u32) {
                     const field_val = @field(val, field.name);
-                    try @field(s, extra_or_scratch).append(field_val);
+                    try a.extra.append(field_val);
                 } else if (field.type == bool) {
                     const field_val = @field(val, field.name);
-                    try @field(s, extra_or_scratch).append(@intFromBool(field_val));
+                    try a.extra.append(@intFromBool(field_val));
                 } else {
-                    _ = try s.append_struct(extra_or_scratch, field.type, @field(val, field.name));
+                    _ = try a.append_extra_struct(field.type, @field(val, field.name));
                 }
             }
             return @intCast(index);
@@ -340,19 +256,7 @@ pub const AirState = struct {
         }
     }
 
-    fn pop_scratch_to_extra(s: *AirState, count: usize) !AirInst.ExtraSlice {
-        print("\nPopping {} to extra, scratch has length {} \n", .{ count, s.scratch.items.len });
-        const elems = s.scratch.items[s.scratch.items.len - count ..];
-
-        const start: u32 = @intCast(s.extra.items.len);
-        try s.extra.appendSlice(elems);
-        const end: u32 = @intCast(s.extra.items.len);
-
-        s.scratch.items.len -= count;
-        return .{ .start = start, .end = end };
-    }
-
-    pub fn get_extra_struct(a: *AirState, comptime s_typ: type, extra_index: Node.ExtraIndex) s_typ {
+    pub fn get_extra_struct(a: *Air, comptime s_typ: type, extra_index: Node.ExtraIndex) s_typ {
         const type_info = @typeInfo(s_typ);
         if (type_info == .Struct) {
             const s_info = type_info.Struct;
@@ -381,10 +285,123 @@ pub const AirState = struct {
             @panic("Can only retrieve structs of structs/u32s");
         }
     }
+};
+
+pub const AirState = struct {
+    scratch: std.ArrayList(u32),
+
+    air: Air,
+
+    scopes: ScopeList,
+    ast: *Ast,
+
+    pub const ScopeList = std.ArrayList(Scope);
+
+    fn get_air(a: *AirState) Air {
+        return a.air;
+    }
+
+    fn intern_token(s: *AirState, index: Token.Index) Allocator.Error!Air.StringIndex {
+        const tok = s.ast.tokens.get(index);
+        const var_str = tokeniser_mod.token_to_str(tok, s.ast.src);
+        return s.air.intern_string(var_str);
+    }
+
+    fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.IndexRef, type_inst: AirInst.IndexRef) AirError!void {
+        const str_index = try s.intern_token(var_tok);
+
+        print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
+        switch (s.scopes.items[s.scopes.items.len - 1]) {
+            .top => |*top| {
+                if (top.get(str_index)) |_| {
+                    return error.Shadowing;
+                }
+                try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst, .type_inst = type_inst });
+            },
+            // .func_params => |*func_scope| {
+            //     const param_scope = func_scope.params;
+            //     const blk_scope = func_scope.block;
+            //     if (param_scope.get(str_index)) |_| {
+            //         return error.Shadowing;
+            //     }
+            //     if (blk_scope.get(str_index)) |_| {
+            //         return error.Shadowing;
+            //     }
+            //     try func_scope.block.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
+            // },
+        }
+    }
+
+    fn get_var(s: *AirState, var_tok: Token.Index) AirError!*Scope.IdentifierInfo {
+        const str_index = try s.intern_token(var_tok);
+        var scope_i = s.scopes.items.len;
+        while (scope_i > 0) {
+            scope_i -= 1;
+            const scope = s.scopes.items[scope_i];
+            switch (scope) {
+                .top => |*top| {
+                    if (top.getPtr(str_index)) |info| {
+                        return info;
+                    }
+                    // try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
+                },
+                // .func_params => |*func_scope| {
+                //     const param_scope = func_scope.params;
+                //     const blk_scope = func_scope.block;
+                //     if (param_scope.getPtr(str_index)) |info| {
+                //         return info;
+                //     }
+                //     if (blk_scope.getPtr(str_index)) |info| {
+                //         return info;
+                //     }
+                //     // try top.put(str_index, Scope.IdentifierInfo{ .mutable = mutable, .inst = inst });
+                // },
+            }
+        }
+        print("Undefined identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
+        return error.UndefinedVar;
+    }
+
+    fn append_scratch_struct(s: *AirState, comptime s_typ: type, val: s_typ) Allocator.Error!Air.ExtraIndex {
+        const type_info = comptime @typeInfo(s_typ);
+        if (type_info == .Struct) {
+            const s_info = comptime type_info.Struct;
+            const index = s.air.extra.items.len;
+            inline for (s_info.fields) |field| {
+                if (field.type == AirInst.IndexRef) {
+                    const field_val = @field(val, field.name);
+                    try s.scratch.append(@intFromEnum(field_val));
+                } else if (field.type == u32) {
+                    const field_val = @field(val, field.name);
+                    try s.scratch.append(field_val);
+                } else if (field.type == bool) {
+                    const field_val = @field(val, field.name);
+                    try s.scratch.append(@intFromBool(field_val));
+                } else {
+                    _ = try s.append_scratch_struct(field.type, @field(val, field.name));
+                }
+            }
+            return @intCast(index);
+        } else {
+            @panic("Can only append structs of structs/u32s");
+        }
+    }
+
+    fn pop_scratch_to_extra(s: *AirState, count: usize) !AirInst.ExtraSlice {
+        print("\nPopping {} to extra, scratch has length {} \n", .{ count, s.scratch.items.len });
+        const elems = s.scratch.items[s.scratch.items.len - count ..];
+
+        const start: u32 = @intCast(s.air.extra.items.len);
+        try s.air.extra.appendSlice(elems);
+        const end: u32 = @intCast(s.air.extra.items.len);
+
+        s.scratch.items.len -= count;
+        return .{ .start = start, .end = end };
+    }
 
     fn append_inst(s: *AirState, instr: AirInst) !AirInst.IndexRef {
-        try s.instructions.append(s.allocator, instr);
-        return @enumFromInt(s.instructions.len - 1);
+        try s.air.instructions.append(s.air.allocator, instr);
+        return @enumFromInt(s.air.instructions.len - 1);
     }
 
     fn deinit(s: *AirState) void {
@@ -404,7 +421,7 @@ pub const AirState = struct {
     }
 };
 
-fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
+pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
     // print("------------ Printing AIR ----------\n", .{});
     // print("Instruction count : {}\n", .{s.instructions.len});
 
@@ -415,7 +432,7 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
         }
 
         print("%{} = ", .{index});
-        const inst = s.instructions.get(index);
+        const inst = a.instructions.get(index);
         switch (inst) {
             .int => |int| {
                 print("int({})", .{int});
@@ -426,13 +443,16 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
             .type_as => |type_as| {
                 print("type_as(%{}, %{})", .{ type_as.type, type_as.expr });
             },
+            .type_of => |type_of| {
+                print("type_of(%{})", .{type_of});
+            },
             .br => |br_extra| {
-                const br = s.get_extra_struct(AirInst.Br, br_extra);
+                const br = a.get_extra_struct(AirInst.Br, br_extra);
                 print("br(%{}, %{}, %{})", .{ br.cond, br.then_blk, br.else_blk });
             },
             .block => |blk| {
                 print("block(%{d}, %{d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
-                try print_air(s, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end) + 1, indent + 1);
+                try print_air(a, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end) + 1, indent + 1);
                 index = @intFromEnum(blk.end);
 
                 for (0..indent) |_| {
@@ -442,12 +462,12 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
             },
             .struct_def => |def| {
                 const type_info = @typeInfo(AirInst.DeclInfo);
-                const field_count: AirState.ExtraIndex = @intCast(type_info.Struct.fields.len);
-                print("struct def with(", .{});
+                const field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
+                print("struct def (", .{});
                 var extra = def.start;
                 while (extra < def.end) {
-                    const field_info = s.get_extra_struct(AirInst.DeclInfo, extra);
-                    const var_name = s.get_string(field_info.var_name);
+                    const field_info = a.get_extra_struct(AirInst.DeclInfo, extra);
+                    const var_name = a.get_string(field_info.var_name);
                     print("{s} : %{}, ", .{ var_name, field_info.type_inst });
 
                     extra += field_count;
@@ -455,23 +475,20 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
                 print(")", .{});
             },
             .arg => |arg| {
-                print("arg({s})", .{s.get_string(arg)});
+                print("arg({s}, {})", .{ a.get_string(arg.name), arg.type });
             },
             .fn_def => |fn_extra| {
-                const fn_def = s.get_extra_struct(AirInst.FnDef, fn_extra);
-                const type_info = @typeInfo(AirInst.DeclInfo);
-                const field_count: AirState.ExtraIndex = @intCast(type_info.Struct.fields.len);
-                const fn_name = s.get_string(fn_def.name);
+                const fn_def = a.get_extra_struct(AirInst.FnDef, fn_extra);
+                const fn_name = a.get_string(fn_def.name);
                 print("fn {s}(", .{fn_name});
-                var extra = fn_def.params.start;
-                while (extra < fn_def.params.end) {
-                    const field_info = s.get_extra_struct(AirInst.DeclInfo, extra);
-                    const var_name = s.get_string(field_info.var_name);
-                    print("{s} : %{}, ", .{ var_name, field_info.type_inst });
 
-                    extra += field_count;
+                const params = a.extra.items[fn_def.params.start..fn_def.params.end];
+                for (params) |param| {
+                    const arg = a.instructions.get(param).arg;
+                    const var_name = a.get_string(arg.name);
+                    print("{s} : %{}, ", .{ var_name, arg.type });
                 }
-                print(") {}", .{fn_def.ret_type});
+                print(") {} at blk %{d}", .{ fn_def.ret_type, @intFromEnum(fn_def.blk) });
             },
             else => return error.Unimplemented,
         }
@@ -483,7 +500,7 @@ fn print_air(s: *AirState, start: u32, stop: u32, indent: u32) !void {
 fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index, gen_arg_insts: bool) AirError!AirInst.ExtraSlice {
     // const start_extra: AirState.ExtraIndex = @intCast(s.extra.items.len);
     // var end_extra: AirState.ExtraIndex = undefined;
-    var count: AirState.ExtraIndex = 0;
+    var count: Air.ExtraIndex = 0;
     for (d_indeces) |d_index| {
         const decl = s.ast.nodes.items[d_index];
         switch (decl) {
@@ -493,14 +510,14 @@ fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index, gen_arg_i
                 const decl_name = try s.intern_token(type_decl.identifier);
                 const type_inst = try air_gen_expr(s, type_decl.decl_type);
                 const field_info = AirInst.DeclInfo{ .var_name = decl_name, .mutable = false, .type_inst = type_inst };
-                _ = try s.append_struct("scratch", AirInst.DeclInfo, field_info);
+                _ = try s.append_scratch_struct(AirInst.DeclInfo, field_info);
                 print("Scratch len: {}\n", .{s.scratch.items.len});
                 count += 1;
                 if (gen_arg_insts) {
-                    const arg_inst = AirInst{ .arg = decl_name };
+                    const arg_inst = AirInst{ .arg = .{ .name = decl_name, .type = type_inst } };
                     const arg_inst_index = try s.append_inst(arg_inst);
 
-                    try s.push_var(type_decl.identifier, false, arg_inst_index);
+                    try s.push_var(type_decl.identifier, false, arg_inst_index, type_inst);
                     // if (id_map) |*map| {
                     // map.put(decl_name, Scope.IdentifierInfo{ .mutable = false, .inst = arg_inst_index });
                     // }
@@ -511,7 +528,7 @@ fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index, gen_arg_i
         }
     }
     print("Encounterd {} decl in list \n", .{count});
-    const field_count: AirState.ExtraIndex = @intCast(@typeInfo(AirInst.DeclInfo).Struct.fields.len);
+    const field_count: Air.ExtraIndex = @intCast(@typeInfo(AirInst.DeclInfo).Struct.fields.len);
     return s.pop_scratch_to_extra(field_count * count);
 }
 
@@ -572,12 +589,16 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
 }
 
 fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.Index, expr: Node.Index) !void {
-    var inst = try air_gen_expr(s, expr);
+    const expr_inst = try air_gen_expr(s, expr);
+
+    var type_inst: AirInst.IndexRef = undefined;
     if (type_node) |node| {
-        const type_inst = try air_gen_expr(s, node);
-        inst = try s.append_inst(.{ .type_as = .{ .type = type_inst, .expr = inst } });
+        type_inst = try air_gen_expr(s, node);
+    } else {
+        type_inst = try s.append_inst(.{ .type_of = expr_inst });
     }
-    try s.push_var(id, mutable, inst);
+    const type_as_inst = try s.append_inst(.{ .type_as = .{ .type = type_inst, .expr = expr_inst } });
+    try s.push_var(id, mutable, type_as_inst, type_inst);
 }
 
 fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void {
@@ -604,18 +625,43 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
                 const fn_decl = s.ast.get_extra_struct(Node.FnDeclParams, fn_extra);
                 const fn_name = try s.intern_token(fn_decl.identifier);
                 const reserved_air_index = try s.append_inst(undefined);
-                try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.allocator) });
+                try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.air.allocator) });
 
                 const param_indeces = s.ast.extra.items[fn_decl.params.start..fn_decl.params.end];
-                const param_slice = try air_gen_decl_info_list(s, param_indeces, true);
+
+                var count: Air.ExtraIndex = 0;
+                for (param_indeces) |param_index| {
+                    const decl = s.ast.nodes.items[param_index];
+                    switch (decl) {
+                        .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
+                        .var_decl_type => |type_decl| {
+                            const decl_name = try s.intern_token(type_decl.identifier);
+                            const type_inst = try air_gen_expr(s, type_decl.decl_type);
+
+                            const arg_inst = AirInst{ .arg = .{ .name = decl_name, .type = type_inst } };
+                            const arg_inst_index = try s.append_inst(arg_inst);
+
+                            try s.push_var(type_decl.identifier, false, arg_inst_index, type_inst);
+
+                            // Push the insts of each arg to scratch so that we can later pop them into extra
+                            // as a list than the fn def can reference.
+                            _ = try s.scratch.append(@intFromEnum(arg_inst_index));
+                            count += 1;
+                        },
+                        .mut_var_decl_type => return error.Unimplemented,
+                        else => unreachable,
+                    }
+                }
+                const param_slice = try s.pop_scratch_to_extra(count);
+                // const param_slice = try air_gen_decl_info_list(s, param_indeces, true);
 
                 const ret_type = try air_gen_expr(s, fn_decl.ret_type);
 
-                const fn_def = AirInst.FnDef{ .name = fn_name, .params = param_slice, .ret_type = ret_type };
-                const inst = AirInst{ .fn_def = try s.append_struct("extra", AirInst.FnDef, fn_def) };
-                s.instructions.set(@intFromEnum(reserved_air_index), inst);
+                const blk = try air_gen_block(s, fn_decl.block, false);
 
-                _ = try air_gen_block(s, fn_decl.block, false);
+                const fn_def = AirInst.FnDef{ .name = fn_name, .params = param_slice, .ret_type = ret_type, .blk = blk };
+                const inst = AirInst{ .fn_def = try s.air.append_extra_struct(AirInst.FnDef, fn_def) };
+                s.air.instructions.set(@intFromEnum(reserved_air_index), inst);
             },
 
             .assignment => |assign| {
@@ -640,7 +686,8 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
                     };
                     new_inst = try s.append_inst(assign_inst);
                 }
-                target_info.inst = new_inst;
+                const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = target_info.type_inst, .expr = new_inst } });
+                target_info.inst = type_as_inst;
             },
             .if_else_statement => |if_else| {
                 const cond_inst = try air_gen_expr(s, if_else.condition);
@@ -651,9 +698,9 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
                 const else_blk = try air_gen_block(s, if_else.else_block, true);
 
                 const br_struct = AirInst.Br{ .cond = cond_inst, .then_blk = then_blk, .else_blk = else_blk };
-                const br = try s.append_struct("extra", AirInst.Br, br_struct);
+                const br = try s.air.append_extra_struct(AirInst.Br, br_struct);
 
-                s.instructions.set(@intFromEnum(br_inst), .{ .br = br });
+                s.air.instructions.set(@intFromEnum(br_inst), .{ .br = br });
                 // const then_blk = try air.append_inst(AirInst { .block = .{.start = air.inst}})
             },
             else => {
@@ -667,7 +714,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
 fn air_gen_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.IndexRef {
     print("AIR gen for block {}\n", .{n_index});
     if (new_scope) {
-        try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.allocator) });
+        try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.air.allocator) });
     }
 
     var s_indeces: []const Node.Index = undefined;
@@ -684,13 +731,14 @@ fn air_gen_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.In
         },
         else => return error.Unimplemented,
     }
-    const start_inst: AirInst.IndexRef = @enumFromInt(s.instructions.len);
+    const start_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len);
     const blk_inst = try s.append_inst(AirInst{ .block = .{ .start = undefined, .end = undefined } });
     _ = try air_gen_statements(s, s_indeces);
-    const end_inst: AirInst.IndexRef = @enumFromInt(s.instructions.len - 1);
-    s.instructions.set(@intFromEnum(blk_inst), AirInst{ .block = .{ .start = start_inst, .end = end_inst } });
+    const end_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len - 1);
+    s.air.instructions.set(@intFromEnum(blk_inst), AirInst{ .block = .{ .start = start_inst, .end = end_inst } });
     if (new_scope) {
-        _ = s.scopes.pop();
+        var old_scope = s.scopes.pop();
+        old_scope.top.deinit();
     }
 
     return blk_inst;
@@ -698,25 +746,27 @@ fn air_gen_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.In
 
 pub fn air_gen(ast: *Ast) !Air {
     var s = AirState{
-        .instructions = AirInst.List{},
-        .extra = AirState.ExtraList.init(ast.allocator),
+        .air = Air{
+            .instructions = AirInst.List{},
+            .extra = Air.ExtraList.init(ast.allocator),
+
+            .string_index_map = std.StringHashMap(Air.StringIndex).init(ast.allocator),
+            .string_len_map = std.AutoHashMap(Air.StringIndex, Air.StringLen).init(ast.allocator),
+            .strings = std.ArrayList(u8).init(ast.allocator),
+
+            .allocator = ast.allocator,
+        },
         .scratch = std.ArrayList(u32).init(ast.allocator),
 
         .scopes = AirState.ScopeList.init(ast.allocator),
 
-        .string_index_map = std.StringHashMap(AirState.StringIndex).init(ast.allocator),
-        .string_len_map = std.AutoHashMap(AirState.StringIndex, AirState.StringLen).init(ast.allocator),
-        .strings = std.ArrayList(u8).init(ast.allocator),
-
         .ast = ast,
-
-        .allocator = ast.allocator,
     };
     defer s.deinit();
 
     // const root_node = ast.nodes.items[ast.root].root;
     _ = try air_gen_block(&s, ast.root, true);
-    try print_air(&s, 0, @intCast(s.instructions.len), 0);
+    try print_air(&s.air, 0, @intCast(s.air.instructions.len), 0);
 
     return s.get_air();
 }

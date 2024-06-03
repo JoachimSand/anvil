@@ -1,0 +1,5 @@
+BinNode := struct { d : u32;};
+
+fn add(a : BinNode, b : struct { e : u32;}) -> u32 {
+	c := a + b;
+}
