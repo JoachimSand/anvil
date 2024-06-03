@@ -68,7 +68,7 @@ const Value = union(enum) {
 // Typed intermediate representation
 const TirInst = union(enum) {
     const Index = u32;
-    const IndexRef = enum(Index) { tir_boolean = 4294967040, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_typ, _ };
+    const IndexRef = enum(Index) { tir_boolean = 4294967040, tir_true_lit, tir_false_lit, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_typ, _ };
     const List = std.MultiArrayList(TirInst);
 
     const BinOp = struct {
@@ -79,6 +79,15 @@ const TirInst = union(enum) {
     arg: struct {
         typ_ref: IndexRef,
         name: Air.StringIndex,
+    },
+    block: struct {
+        start: Index,
+        end: Index,
+    },
+    br: struct {
+        cond: Index,
+        then_blk: Index,
+        else_blk: Index,
     },
     constant_val: Value.Index,
     constant_type: Type.Index,
@@ -94,6 +103,19 @@ const TirInst = union(enum) {
 };
 
 //
+const TirSpecificError = error{
+    Unimplemented,
+    MissingMapping,
+    ExpectedVal,
+    TypeOfType,
+    NoType,
+    ExpectedBoolean,
+    AdditionTypeError,
+    IntTooLarge,
+    CannotCoerceKnownToUnknown,
+};
+
+pub const TirError = TirSpecificError || Allocator.Error;
 
 const TirState = struct {
     const AirTirMap = std.AutoHashMap(AirInst.IndexRef, TirInst.IndexRef);
@@ -210,6 +232,12 @@ fn print_tir(t: *TirState) !void {
             .arg => |arg| {
                 print("arg(%{}, %{})", .{ arg.typ_ref, arg.name });
             },
+            .br => |br| {
+                print("br %{}, then %{} else %{}", .{ br.cond, br.then_blk, br.else_blk });
+            },
+            .block => |blk| {
+                print("blk %{} to %{}", .{ blk.start, blk.end });
+            },
             else => return error.Unimplemented,
         }
         print(";\n", .{});
@@ -217,9 +245,11 @@ fn print_tir(t: *TirState) !void {
     }
 }
 
-fn get_arithmetic_val(t: *TirState, tir_ref: TirInst.IndexRef) !?Value {
+fn get_val(t: *TirState, tir_ref: TirInst.IndexRef) !?Value {
     switch (tir_ref) {
-        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => return error.ExpectedArithmetic,
+        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => return error.ExpectedVal,
+        .tir_true_lit => return Value{ .boolean = true },
+        .tir_false_lit => return Value{ .boolean = false },
         _ => {
             const lhs_tir_index: TirInst.Index = @intFromEnum(tir_ref);
             const lhs_tir_inst = t.instructions.get(lhs_tir_index);
@@ -239,6 +269,7 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.Inde
             // const tir_type_inst = try tir.append_inst(TirInst{ .constant_type = tir_type });
             return .tir_typ;
         },
+        .tir_true_lit, .tir_false_lit => return .tir_boolean,
         .tir_typ => return error.TypeOfType,
         _ => {
             // The type of index refers to an instruction.
@@ -247,6 +278,7 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.Inde
             const inst = t.instructions.get(inst_index);
 
             switch (inst) {
+                .block, .br => return error.NoType,
                 .constant_type => |type_index| {
                     const tir_type = t.types.get(type_index);
                     _ = tir_type;
@@ -285,6 +317,166 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.Inde
     }
 }
 
+fn tir_gen_blk(t: *TirState, air_start: u32, air_end: u32) !TirInst.Index {
+    var tir_inst = TirInst{ .block = .{ .start = @intCast(t.instructions.len), .end = undefined } };
+    const blk_index = try t.append_inst(tir_inst);
+
+    try tir_gen_instructions(t, air_start, air_end);
+    tir_inst.block.end = @intCast(t.instructions.len - 1);
+    t.instructions.set(@intFromEnum(blk_index), tir_inst);
+    return @intFromEnum(blk_index);
+}
+
+fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst.Index) TirError!void {
+    var air_index: u32 = air_start;
+    const air_instructions = t.air.instructions.slice();
+    while (air_index < air_end) : (air_index += 1) {
+        print("\nGenerating TIR for AIR instruction {}\n", .{air_index});
+        try air_mod.print_air(t.air, air_index, air_index + 1, 0);
+        print("TIR so far:", .{});
+        try print_tir(t);
+
+        const air_inst = air_instructions.get(air_index);
+        switch (air_inst) {
+            .block => |block| {
+                _ = block;
+            },
+            .fn_def => |fn_def| {
+                _ = fn_def;
+            },
+            .br => |br_extra| {
+                const br = t.air.get_extra_struct(AirInst.Br, br_extra);
+                const tir_cond = try t.get_mapping(br.cond);
+                const tir_cond_val = try get_val(t, tir_cond);
+
+                const then_blk = t.air.instructions.get(@intFromEnum(br.then_blk));
+                const else_blk = t.air.instructions.get(@intFromEnum(br.else_blk));
+                if (tir_cond_val) |val| {
+                    switch (val) {
+                        .boolean => |boolean| {
+                            if (boolean) {
+                                try tir_gen_instructions(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
+                            } else {
+                                try tir_gen_instructions(t, @intFromEnum(else_blk.block.start), @intFromEnum(else_blk.block.end));
+                            }
+                            const else_end: u32 = @intFromEnum(else_blk.block.end);
+                            air_index = else_end;
+                        },
+                        else => return error.ExpectedBoolean,
+                    }
+                } else {
+
+                    // Compile-time evaluation not possible.
+                    const cond_typ = try get_tir_inst_ret_type(t, tir_cond);
+                    if (cond_typ != .tir_boolean) {
+                        return error.ExpectedBoolean;
+                    }
+                    var tir_br_inst = TirInst{ .br = .{ .cond = @intFromEnum(tir_cond), .then_blk = undefined, .else_blk = undefined } };
+                    const inst_index = try t.append_inst(tir_br_inst);
+
+                    tir_br_inst.br.then_blk = try tir_gen_blk(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
+                    tir_br_inst.br.else_blk = try tir_gen_blk(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
+                    t.instructions.set(@intFromEnum(inst_index), tir_br_inst);
+                }
+            },
+            .add => |air_add| {
+                const lhs_tir_ref: TirInst.IndexRef = t.air_tir_map.get(air_add.lhs) orelse return error.MissingMapping;
+                const lhs_val = try get_val(t, lhs_tir_ref);
+                const rhs_tir_ref: TirInst.IndexRef = t.air_tir_map.get(air_add.rhs) orelse return error.MissingMapping;
+                const rhs_val = try get_val(t, rhs_tir_ref);
+                if (lhs_val) |l_val| {
+                    if (rhs_val) |r_val| {
+                        if (l_val == .unknown_int and r_val == .unknown_int) {
+                            try t.append_constant_val(Value{ .unknown_int = l_val.unknown_int + r_val.unknown_int }, air_index);
+                            continue;
+                        } else {
+                            return error.Unimplemented;
+                        }
+                    }
+                }
+
+                // Compile-time evaluation not possible.
+                const lhs_typ = try get_tir_inst_ret_type(t, lhs_tir_ref);
+                const rhs_typ = try get_tir_inst_ret_type(t, rhs_tir_ref);
+                var res_inst: TirInst.IndexRef = undefined;
+                if (lhs_typ == .tir_i8 and rhs_typ == .tir_i8) {
+                    res_inst = try t.append_inst(TirInst{ .add_i8 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_i16 and rhs_typ == .tir_i16) {
+                    res_inst = try t.append_inst(TirInst{ .add_i16 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_i32 and rhs_typ == .tir_i32) {
+                    res_inst = try t.append_inst(TirInst{ .add_i32 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_i64 and rhs_typ == .tir_i64) {
+                    res_inst = try t.append_inst(TirInst{ .add_i64 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_u8 and rhs_typ == .tir_u8) {
+                    res_inst = try t.append_inst(TirInst{ .add_u8 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_u16 and rhs_typ == .tir_u16) {
+                    res_inst = try t.append_inst(TirInst{ .add_u16 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_u32 and rhs_typ == .tir_u32) {
+                    res_inst = try t.append_inst(TirInst{ .add_u32 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else if (lhs_typ == .tir_u64 and rhs_typ == .tir_u64) {
+                    res_inst = try t.append_inst(TirInst{ .add_u64 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
+                } else {
+                    return error.AdditionTypeError;
+                }
+                try t.air_tir_map.put(@enumFromInt(air_index), res_inst);
+            },
+            .type_of => |air_type_inst| {
+                const tir_expr_inst = try t.get_mapping(air_type_inst);
+                const tir_expr_type = try get_tir_inst_ret_type(t, tir_expr_inst);
+                try t.air_tir_map.put(@enumFromInt(air_index), tir_expr_type);
+            },
+            .type_as => |type_as| {
+                const tir_expr_ref = try t.get_mapping(type_as.expr);
+                const tir_type_ref = try t.get_mapping(type_as.type);
+                const maybe_val = try get_val(t, tir_expr_ref);
+                switch (tir_type_ref) {
+                    .tir_i8 => {
+                        if (maybe_val) |val| {
+                            if (val == .unknown_int) {
+                                if (val.unknown_int < (1 << 7) and val.unknown_int >= -(1 << 7)) {
+                                    try t.append_constant_val(Value{ .i8 = @intCast(val.unknown_int) }, air_index);
+                                } else {
+                                    return error.IntTooLarge;
+                                }
+                            }
+                        }
+                    },
+                    // _ => {
+                    //     // const tir_type_inst = try tir.get_mapping(type_as.type);
+                    //     // switch (tir_type_inst) {
+                    //     //     .boolean
+                    //     // }
+                    // },
+                    .tir_unknown_int => {
+                        if (maybe_val) |val| {
+                            if (val == .unknown_int) {
+                                try t.air_tir_map.put(@enumFromInt(air_index), tir_expr_ref);
+                            } else {
+                                return error.CannotCoerceKnownToUnknown;
+                            }
+                        }
+                    },
+                    else => {
+                        print("Type as for {} not impl.\n", .{tir_type_ref});
+                        return error.Unimplemented;
+                    },
+                }
+            },
+            .arg => |air_arg| {
+                const tir_type_ref = try t.get_mapping(air_arg.type);
+                const tir_arg = TirInst{ .arg = .{ .name = air_arg.name, .typ_ref = tir_type_ref } };
+                const inst_index = try t.append_inst(tir_arg);
+                try t.air_tir_map.put(@enumFromInt(air_index), inst_index);
+            },
+            .int => |int| {
+                const val = Value{ .unknown_int = @intCast(int) };
+                try t.append_constant_val(val, air_index);
+            },
+            else => return error.Unimplemented,
+        }
+    }
+}
+
 pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     var tir = TirState{
         .instructions = TirInst.List{},
@@ -302,6 +494,8 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     defer tir.deinit();
 
     try tir.air_tir_map.put(AirInst.IndexRef.bool, TirInst.IndexRef.tir_boolean);
+    try tir.air_tir_map.put(AirInst.IndexRef.true_lit, TirInst.IndexRef.tir_true_lit);
+    try tir.air_tir_map.put(AirInst.IndexRef.false_lit, TirInst.IndexRef.tir_false_lit);
     try tir.air_tir_map.put(AirInst.IndexRef.u8, TirInst.IndexRef.tir_u8);
     try tir.air_tir_map.put(AirInst.IndexRef.u16, TirInst.IndexRef.tir_u16);
     try tir.air_tir_map.put(AirInst.IndexRef.u32, TirInst.IndexRef.tir_u32);
@@ -312,118 +506,6 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     try tir.air_tir_map.put(AirInst.IndexRef.i32, TirInst.IndexRef.tir_i32);
     try tir.air_tir_map.put(AirInst.IndexRef.i64, TirInst.IndexRef.tir_i64);
 
-    var air_index: u32 = 0;
-    const air_instructions = air.instructions.slice();
-    while (air_index < air.instructions.len) : (air_index += 1) {
-        print("\nGenerating TIR for AIR instruction {}\n", .{air_index});
-        try air_mod.print_air(air, air_index, air_index + 1, 0);
-        print("TIR so far:", .{});
-        try print_tir(&tir);
-
-        const air_inst = air_instructions.get(air_index);
-        switch (air_inst) {
-            .block => |block| {
-                _ = block;
-            },
-            .fn_def => |fn_def| {
-                _ = fn_def;
-            },
-            .add => |air_add| {
-                const lhs_tir_ref: TirInst.IndexRef = tir.air_tir_map.get(air_add.lhs) orelse return error.MissingMapping;
-                const lhs_val = try get_arithmetic_val(&tir, lhs_tir_ref);
-                const rhs_tir_ref: TirInst.IndexRef = tir.air_tir_map.get(air_add.rhs) orelse return error.MissingMapping;
-                const rhs_val = try get_arithmetic_val(&tir, rhs_tir_ref);
-                if (lhs_val) |l_val| {
-                    if (rhs_val) |r_val| {
-                        if (l_val == .unknown_int and r_val == .unknown_int) {
-                            try tir.append_constant_val(Value{ .unknown_int = l_val.unknown_int + r_val.unknown_int }, air_index);
-                            continue;
-                        } else {
-                            return error.Unimplemented;
-                        }
-                    }
-                }
-
-                // Compile-time evaluation not possible.
-                const lhs_typ = try get_tir_inst_ret_type(&tir, lhs_tir_ref);
-                const rhs_typ = try get_tir_inst_ret_type(&tir, rhs_tir_ref);
-                var res_inst: TirInst.IndexRef = undefined;
-                if (lhs_typ == .tir_i8 and rhs_typ == .tir_i8) {
-                    res_inst = try tir.append_inst(TirInst{ .add_i8 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_i16 and rhs_typ == .tir_i16) {
-                    res_inst = try tir.append_inst(TirInst{ .add_i16 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_i32 and rhs_typ == .tir_i32) {
-                    res_inst = try tir.append_inst(TirInst{ .add_i32 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_i64 and rhs_typ == .tir_i64) {
-                    res_inst = try tir.append_inst(TirInst{ .add_i64 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_u8 and rhs_typ == .tir_u8) {
-                    res_inst = try tir.append_inst(TirInst{ .add_u8 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_u16 and rhs_typ == .tir_u16) {
-                    res_inst = try tir.append_inst(TirInst{ .add_u16 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_u32 and rhs_typ == .tir_u32) {
-                    res_inst = try tir.append_inst(TirInst{ .add_u32 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else if (lhs_typ == .tir_u64 and rhs_typ == .tir_u64) {
-                    res_inst = try tir.append_inst(TirInst{ .add_u64 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
-                } else {
-                    return error.TypeError;
-                }
-                try tir.air_tir_map.put(@enumFromInt(air_index), res_inst);
-            },
-            .type_of => |air_type_inst| {
-                const tir_expr_inst = try tir.get_mapping(air_type_inst);
-                const tir_expr_type = try get_tir_inst_ret_type(&tir, tir_expr_inst);
-                try tir.air_tir_map.put(@enumFromInt(air_index), tir_expr_type);
-            },
-            .type_as => |type_as| {
-                const tir_expr_ref = try tir.get_mapping(type_as.expr);
-                const tir_type_ref = try tir.get_mapping(type_as.type);
-                const maybe_val = try get_arithmetic_val(&tir, tir_expr_ref);
-                switch (tir_type_ref) {
-                    .tir_i8 => {
-                        if (maybe_val) |val| {
-                            if (val == .unknown_int) {
-                                if (val.unknown_int < (1 << 7) and val.unknown_int >= -(1 << 7)) {
-                                    try tir.append_constant_val(Value{ .i8 = @intCast(val.unknown_int) }, air_index);
-                                } else {
-                                    return error.IntTooLarge;
-                                }
-                            }
-                        }
-                    },
-                    // _ => {
-                    //     // const tir_type_inst = try tir.get_mapping(type_as.type);
-                    //     // switch (tir_type_inst) {
-                    //     //     .boolean
-                    //     // }
-                    // },
-                    .tir_unknown_int => {
-                        if (maybe_val) |val| {
-                            if (val == .unknown_int) {
-                                try tir.air_tir_map.put(@enumFromInt(air_index), tir_expr_ref);
-                            } else {
-                                return error.CannotCoerceKnownToUnknown;
-                            }
-                        }
-                    },
-                    else => {
-                        print("Type as for {} not impl.\n", .{tir_type_ref});
-                        return error.Unimplemented;
-                    },
-                }
-            },
-            .arg => |air_arg| {
-                const tir_type_ref = try tir.get_mapping(air_arg.type);
-                const tir_arg = TirInst{ .arg = .{ .name = air_arg.name, .typ_ref = tir_type_ref } };
-                const inst_index = try tir.append_inst(tir_arg);
-                try tir.air_tir_map.put(@enumFromInt(air_index), inst_index);
-            },
-            .int => |int| {
-                const val = Value{ .unknown_int = @intCast(int) };
-                try tir.append_constant_val(val, air_index);
-            },
-            else => return error.Unimplemented,
-        }
-    }
-
+    try tir_gen_instructions(&tir, 0, @intCast(tir.air.instructions.len));
     try print_tir(&tir);
 }

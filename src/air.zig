@@ -94,17 +94,17 @@ pub const AirInst = union(enum) {
         start: Air.ExtraIndex,
         end: Air.ExtraIndex,
     };
-    const DeclInfo = packed struct {
+    pub const DeclInfo = packed struct {
         var_name: Air.StringIndex,
         type_inst: IndexRef,
         mutable: bool,
     };
-    const Br = packed struct {
+    pub const Br = packed struct {
         cond: IndexRef,
         then_blk: IndexRef,
         else_blk: IndexRef,
     };
-    const FnDef = packed struct {
+    pub const FnDef = packed struct {
         name: Air.StringIndex,
         params: ExtraSlice,
         ret_type: IndexRef,

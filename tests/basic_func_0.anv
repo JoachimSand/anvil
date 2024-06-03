@@ -1,4 +1,17 @@
 fn add(a : i8, b : i8) -> i8 {
 	d : i8 = 3 + 4;
 	c := d + b;
+	if true {
+		e := 5;
+	} else {
+		e := 6;
+	}
+}
+
+fn add(a : i8, b : bool) -> i8 {
+	if b {
+		e := 5;
+	} else {
+		e := 6;
+	}
 }
