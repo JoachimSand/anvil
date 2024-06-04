@@ -1,0 +1,6 @@
+fn factorial(n : i8) -> i8 {
+	mut index := n;
+	while 1 > 0 {
+		index += 1;
+	}
+}

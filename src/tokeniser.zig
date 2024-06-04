@@ -149,9 +149,15 @@ pub const Tokeniser = struct {
     pub fn tokenise_all(tokeniser: *Tokeniser, allocator: std.mem.Allocator) !Token.List {
         var tok_list = Token.List{};
         while (true) {
-            const tok = tokeniser.next_token() catch break;
+            const tok = tokeniser.next_token() catch |e| {
+                if (e == error.EndOfInput) {
+                    break;
+                } else {
+                    return e;
+                }
+            };
             try tok_list.append(allocator, .{ .type = tok.type, .start = tok.start });
-            // print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
+            print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
         }
         return tok_list;
     }
@@ -264,7 +270,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                     }
                     start = pos;
                     if (pos >= src.len - 1) {
-                        return error.EarlyTermination;
+                        return error.EndOfInput;
                     }
 
                     continue;
@@ -299,7 +305,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                     'x' => {
                         state = .pending_integer_hex;
                     },
-                    else => return error.InvalidIntegerLit,
+                    else => return TokenFull.init(.integer_dec, start, pos),
                 }
             },
             .integer_dec => switch (cur_char) {
@@ -488,7 +494,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
     switch (state) {
         .start => return error.EndOfInput,
         .identifier_or_keyword => return TokenFull.init(.identifier, start, pos),
-        .integer_unknown => return error.UnknownInteger,
+        .integer_unknown => return TokenFull.init(.integer_dec, start, pos),
 
         .pending_integer_bin => return error.InvalidIntegerLit,
         .pending_integer_oct => return error.InvalidIntegerLit,

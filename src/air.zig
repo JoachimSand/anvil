@@ -99,7 +99,7 @@ pub const AirInst = union(enum) {
         type_inst: IndexRef,
         mutable: bool,
     };
-    pub const Br = packed struct {
+    pub const BrEither = packed struct {
         cond: IndexRef,
         then_blk: IndexRef,
         else_blk: IndexRef,
@@ -120,7 +120,13 @@ pub const AirInst = union(enum) {
         start: IndexRef,
         end: IndexRef,
     },
-    br: Air.ExtraIndex,
+    br: IndexRef,
+    br_cond: struct {
+        cond: IndexRef,
+        blk: IndexRef,
+    },
+    br_either: Air.ExtraIndex,
+
     type_as: struct {
         type: IndexRef,
         expr: IndexRef,
@@ -138,10 +144,10 @@ pub const AirInst = union(enum) {
         lhs: IndexRef,
         rhs: IndexRef,
     },
-    gt: struct {
-        lhs: IndexRef,
-        rhs: IndexRef,
-    },
+    // gt: struct {
+    //     lhs: IndexRef,
+    //     rhs: IndexRef,
+    // },
     alloc: struct {
         type: IndexRef,
     },
@@ -451,16 +457,29 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .add => |add| {
                 print("add(%{}, %{})", .{ add.lhs, add.rhs });
             },
+            .lt => |lt| {
+                print("lt(%{} < %{})", .{ lt.lhs, lt.rhs });
+            },
+            // .gt => |gt| {
+            //     print("gt(%{} > %{})", .{ gt.lhs, gt.rhs });
+            // },
             .type_as => |type_as| {
                 print("type_as(%{}, %{})", .{ type_as.type, type_as.expr });
             },
             .type_of => |type_of| {
                 print("type_of(%{})", .{type_of});
             },
-            .br => |br_extra| {
-                const br = a.get_extra_struct(AirInst.Br, br_extra);
-                print("br(%{}, %{}, %{})", .{ br.cond, br.then_blk, br.else_blk });
+            .br => |br| {
+                print("br %{}", .{br});
             },
+            .br_cond => |br| {
+                print("br_cond %{}, %{}", .{ br.cond, br.blk });
+            },
+            .br_either => |br_extra| {
+                const br = a.get_extra_struct(AirInst.BrEither, br_extra);
+                print("br_either %{}, (%{} else %{})", .{ br.cond, br.then_blk, br.else_blk });
+            },
+
             .block => |blk| {
                 print("block(%{d}, %{d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
                 try print_air(a, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end) + 1, indent + 1);
@@ -510,7 +529,10 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 }
                 print(") {} at blk %{d}", .{ fn_def.ret_type, @intFromEnum(fn_def.blk) });
             },
-            else => return error.Unimplemented,
+            else => {
+                print("AIR print unimplemented for {}", .{inst});
+                return error.Unimplemented;
+            },
         }
         print(";\n", .{});
         index += 1;
@@ -580,7 +602,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
             const inst = switch (bin_tok.type) {
                 .plus => AirInst{ .add = .{ .lhs = lhs_index, .rhs = rhs_index } },
                 .l_arrow => AirInst{ .lt = .{ .lhs = lhs_index, .rhs = rhs_index } },
-                .r_arrow => AirInst{ .gt = .{ .lhs = lhs_index, .rhs = rhs_index } },
+                .r_arrow => AirInst{ .lt = .{ .lhs = rhs_index, .rhs = lhs_index } },
                 else => return error.Unimplemented,
             };
             return s.append_inst(inst);
@@ -638,13 +660,26 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
     }
 }
 
-fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void {
+fn start_new_block(s: *AirState) !AirInst.Index {
+    const start_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len);
+    return @intFromEnum(try s.append_inst(AirInst{ .block = .{ .start = start_inst, .end = undefined } }));
+}
+
+fn end_block(s: *AirState, block: AirInst.Index) void {
+    const end_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len - 1);
+    var cur_blk = s.air.instructions.get(block);
+    cur_blk.block.end = end_inst;
+    s.air.instructions.set(block, cur_blk);
+}
+
+fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: AirInst.Index) AirError!void {
+    var cur_block_inst = start_block;
     for (s_indeces) |s_index| {
         const statement = s.ast.nodes.items[s_index];
         print("AIR gen for statement {}\n", .{statement});
         switch (statement) {
-            .block => |_| _ = try air_gen_block(s, s_index, true),
-            .block_one => |_| _ = try air_gen_block(s, s_index, true),
+            .block => |_| _ = try air_gen_scoped_block(s, s_index, true),
+            .block_one => |_| _ = try air_gen_scoped_block(s, s_index, true),
 
             .var_decl_full => |decl| try air_gen_decl(s, decl.identifier, false, decl.decl_type, decl.decl_expr),
             .mut_var_decl_full => |decl| try air_gen_decl(s, decl.identifier, true, decl.decl_type, decl.decl_expr),
@@ -694,7 +729,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
 
                 const ret_type = try air_gen_expr(s, fn_decl.ret_type);
 
-                const blk = try air_gen_block(s, fn_decl.block, false);
+                const blk = try air_gen_scoped_block(s, fn_decl.block, false);
 
                 const fn_def = AirInst.FnDef{ .name = fn_name, .params = param_slice, .ret_type = ret_type, .blk = blk };
                 const inst = AirInst{ .fn_def = try s.air.append_extra_struct(AirInst.FnDef, fn_def) };
@@ -716,29 +751,72 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
 
                 const assign_tok = s.ast.tokens.get(assign.token);
                 var new_inst = expr_inst;
+
+                const target_val_inst = try s.append_inst(.{ .load = .{ .type = target_info.type_inst, .ptr = target_info.inst } });
+
                 if (assign_tok.type != .equal) {
                     const assign_inst = switch (assign_tok.type) {
-                        .plus_equal => AirInst{ .add = .{ .lhs = target_info.inst, .rhs = expr_inst } },
+                        .plus_equal => AirInst{ .add = .{ .lhs = target_val_inst, .rhs = expr_inst } },
                         else => return error.Unimplemented,
                     };
                     new_inst = try s.append_inst(assign_inst);
                 }
                 const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = target_info.type_inst, .expr = new_inst } });
-                target_info.inst = type_as_inst;
+
+                _ = try s.append_inst(.{ .store = .{ .val = type_as_inst, .ptr = target_info.inst } });
+
+                // target_info.inst = type_as_inst;
+            },
+            .while_statement => |while_statement| {
+                const prev_block_br = try s.append_inst(undefined);
+                end_block(s, cur_block_inst);
+
+                // Conditional block
+                const cond_blk = try start_new_block(s);
+                s.air.instructions.set(@intFromEnum(prev_block_br), .{ .br = @enumFromInt(cond_blk) });
+                const cond_inst = try air_gen_expr(s, while_statement.condition);
+                var cond_br = AirInst.BrEither{ .cond = cond_inst, .then_blk = undefined, .else_blk = undefined };
+                const cond_br_index = try s.append_inst(undefined);
+
+                end_block(s, cond_blk);
+
+                // Loop body block
+                const while_block = try air_gen_scoped_block(s, while_statement.block, true);
+                _ = try s.append_inst(.{ .br = @enumFromInt(cond_blk) });
+                end_block(s, @intFromEnum(while_block));
+
+                // Block after loop
+                cur_block_inst = try start_new_block(s);
+
+                // Finally, write the contents of the conditional branch to either the loop body or the block after.
+                cond_br.then_blk = while_block;
+                cond_br.else_blk = @enumFromInt(cur_block_inst);
+                const cond_br_inst = AirInst{ .br_either = try s.air.append_extra_struct(AirInst.BrEither, cond_br) };
+                s.air.instructions.set(@intFromEnum(cond_br_index), cond_br_inst);
             },
             .if_else_statement => |if_else| {
                 const cond_inst = try air_gen_expr(s, if_else.condition);
 
                 const br_inst = try s.append_inst(undefined);
+                end_block(s, cur_block_inst);
 
-                const then_blk = try air_gen_block(s, if_else.block, true);
-                const else_blk = try air_gen_block(s, if_else.else_block, true);
+                const then_blk = try air_gen_scoped_block(s, if_else.block, true);
+                const else_br_end = try s.append_inst(undefined);
+                end_block(s, @intFromEnum(then_blk));
 
-                const br_struct = AirInst.Br{ .cond = cond_inst, .then_blk = then_blk, .else_blk = else_blk };
-                const br = try s.air.append_extra_struct(AirInst.Br, br_struct);
+                const else_blk = try air_gen_scoped_block(s, if_else.else_block, true);
+                const then_br_end = try s.append_inst(undefined);
+                end_block(s, @intFromEnum(else_blk));
 
-                s.air.instructions.set(@intFromEnum(br_inst), .{ .br = br });
-                // const then_blk = try air.append_inst(AirInst { .block = .{.start = air.inst}})
+                const br_struct = AirInst.BrEither{ .cond = cond_inst, .then_blk = then_blk, .else_blk = else_blk };
+                const br = try s.air.append_extra_struct(AirInst.BrEither, br_struct);
+
+                // Block after if-else
+                cur_block_inst = try start_new_block(s);
+
+                s.air.instructions.set(@intFromEnum(br_inst), .{ .br_either = br });
+                s.air.instructions.set(@intFromEnum(else_br_end), .{ .br = @enumFromInt(cur_block_inst) });
+                s.air.instructions.set(@intFromEnum(then_br_end), .{ .br = @enumFromInt(cur_block_inst) });
             },
             else => {
                 print("Statement {} is unimplemented\n", .{statement});
@@ -746,9 +824,10 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void
             },
         }
     }
+    end_block(s, cur_block_inst);
 }
 
-fn air_gen_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.IndexRef {
+fn air_gen_scoped_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.IndexRef {
     print("AIR gen for block {}\n", .{n_index});
     if (new_scope) {
         try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.air.allocator) });
@@ -768,17 +847,16 @@ fn air_gen_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.In
         },
         else => return error.Unimplemented,
     }
-    const start_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len);
-    const blk_inst = try s.append_inst(AirInst{ .block = .{ .start = undefined, .end = undefined } });
-    _ = try air_gen_statements(s, s_indeces);
-    const end_inst: AirInst.IndexRef = @enumFromInt(s.air.instructions.len - 1);
-    s.air.instructions.set(@intFromEnum(blk_inst), AirInst{ .block = .{ .start = start_inst, .end = end_inst } });
+    const blk_inst = try start_new_block(s);
+
+    _ = try air_gen_statements(s, s_indeces, blk_inst);
+
     if (new_scope) {
         var old_scope = s.scopes.pop();
         old_scope.top.deinit();
     }
 
-    return blk_inst;
+    return @enumFromInt(blk_inst);
 }
 
 pub fn air_gen(ast: *Ast) !Air {
@@ -802,7 +880,7 @@ pub fn air_gen(ast: *Ast) !Air {
     defer s.deinit();
 
     // const root_node = ast.nodes.items[ast.root].root;
-    _ = try air_gen_block(&s, ast.root, true);
+    _ = try air_gen_scoped_block(&s, ast.root, true);
     try print_air(&s.air, 0, @intCast(s.air.instructions.len), 0);
 
     return s.get_air();

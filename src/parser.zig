@@ -879,6 +879,7 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
 
 // TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
 fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
+    print("Parsing prefixexpr\n", .{});
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
@@ -1122,7 +1123,12 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
 fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     // Parse an "atom"/left hand side of expression
     // TODO: Add pre-fix and post-fix parsing
+    print("Parsing expr\n", .{});
+
     var lhs = try parse_prefix_expr(p);
+
+    print("Parsing expr: Finished prefix\n", .{});
+
     var maybe_op = try p.peek_token();
 
     const cur_prec = start_prec;
