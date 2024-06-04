@@ -28,25 +28,12 @@ const AirInst = air_mod.AirInst;
 // Represents a compile-time known type
 const Type = union(enum) {
     const Index = u32;
+    const IndexRef = enum(Index) { tir_boolean = 4294967040, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_typ, _ };
     const List = std.MultiArrayList(Type);
     const Field = struct { var_name: Air.StringIndex, field_type: Type.Index };
 
-    // TODO: Maybe remove all primitives which are already in TirInst.IndexRef?
-    // boolean,
-    // tir_u64,
-    // tir_u32,
-    // tir_u16,
-    // tir_u8,
-    // tir_i64,
-    // tir_i32,
-    // tir_i16,
-    // tir_i8,
-    // typ,
-    // We need to either store mapping from field names to typeindexes in
-    // TIR or re-use the AIR mappings.
+    ptr: Type.IndexRef,
     type_struct: []Field,
-    // strct: []Type,
-    // array: *Type,
 };
 
 //Compile-time known values.
@@ -68,7 +55,7 @@ const Value = union(enum) {
 // Typed intermediate representation
 const TirInst = union(enum) {
     const Index = u32;
-    const IndexRef = enum(Index) { tir_boolean = 4294967040, tir_true_lit, tir_false_lit, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_typ, _ };
+    const IndexRef = enum(Index) { tir_true_lit = 4294967040, tir_false_lit, _ };
     const List = std.MultiArrayList(TirInst);
 
     const BinOp = struct {
@@ -77,7 +64,7 @@ const TirInst = union(enum) {
     };
 
     arg: struct {
-        typ_ref: IndexRef,
+        typ_ref: Type.IndexRef,
         name: Air.StringIndex,
     },
     block: struct {
@@ -90,7 +77,17 @@ const TirInst = union(enum) {
         else_blk: Index,
     },
     constant_val: Value.Index,
-    constant_type: Type.Index,
+    constant_type: Type.IndexRef,
+    alloca: Type.IndexRef,
+    load: struct {
+        ptr: IndexRef,
+        type: Type.IndexRef,
+    },
+    store: struct {
+        val: IndexRef,
+        val_type: Type.IndexRef,
+        ptr: IndexRef,
+    },
     add_i8: BinOp,
     add_i16: BinOp,
     add_i32: BinOp,
@@ -113,19 +110,22 @@ const TirSpecificError = error{
     AdditionTypeError,
     IntTooLarge,
     CannotCoerceKnownToUnknown,
+    StoringWrongType,
 };
 
 pub const TirError = TirSpecificError || Allocator.Error;
 
 const TirState = struct {
-    const AirTirMap = std.AutoHashMap(AirInst.IndexRef, TirInst.IndexRef);
+    const AirTirInstMap = std.AutoHashMap(AirInst.IndexRef, TirInst.IndexRef);
+    const AirTirTypeMap = std.AutoHashMap(AirInst.IndexRef, Type.IndexRef);
 
     instructions: TirInst.List,
     extra: std.ArrayList(TirInst.IndexRef),
     scratch: std.ArrayList(u32),
 
     air: *Air,
-    air_tir_map: AirTirMap,
+    air_tir_inst_map: AirTirInstMap,
+    air_tir_type_map: AirTirTypeMap,
 
     // compile-time known values
     values: Value.List,
@@ -154,9 +154,17 @@ const TirState = struct {
         return @intCast(index);
     }
 
-    fn get_mapping(t: *TirState, air_index: AirInst.IndexRef) !TirInst.IndexRef {
-        const tir_ref: TirInst.IndexRef = t.air_tir_map.get(air_index) orelse {
-            print("Missing mapping for {}\n", .{air_index});
+    fn get_inst_mapping(t: *TirState, air_index: AirInst.IndexRef) !TirInst.IndexRef {
+        const tir_ref: TirInst.IndexRef = t.air_tir_inst_map.get(air_index) orelse {
+            print("Missing instruction mapping for {}\n", .{air_index});
+            return error.MissingMapping;
+        };
+        return tir_ref;
+    }
+
+    fn get_type_mapping(t: *TirState, air_index: AirInst.IndexRef) !Type.IndexRef {
+        const tir_ref: Type.IndexRef = t.air_tir_type_map.get(air_index) orelse {
+            print("Missing instruction mapping for {}\n", .{air_index});
             return error.MissingMapping;
         };
         return tir_ref;
@@ -166,7 +174,7 @@ const TirState = struct {
         const val_index = try t.append_val(val);
         const tir_inst = TirInst{ .constant_val = val_index };
         const tir_index = try t.append_inst(tir_inst);
-        try t.air_tir_map.put(@enumFromInt(air_index), tir_index);
+        try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_index);
     }
 
     fn deinit(t: *TirState) void {
@@ -174,7 +182,8 @@ const TirState = struct {
         t.extra.deinit();
         t.scratch.deinit();
 
-        t.air_tir_map.deinit();
+        t.air_tir_inst_map.deinit();
+        t.air_tir_type_map.deinit();
 
         t.values.deinit(t.allocator);
         t.types.deinit(t.allocator);
@@ -229,6 +238,15 @@ fn print_tir(t: *TirState) !void {
             .add_u64 => |add| {
                 print("add u64 (%{}, %{})", .{ add.lhs, add.rhs });
             },
+            .alloca => |alloca_type| {
+                print("alloca {}", .{alloca_type});
+            },
+            .load => |load| {
+                print("load {}, {}", .{ load.type, load.ptr });
+            },
+            .store => |store| {
+                print("store {} from {}, {}", .{ store.val_type, store.val, store.ptr });
+            },
             .arg => |arg| {
                 print("arg(%{}, %{})", .{ arg.typ_ref, arg.name });
             },
@@ -247,7 +265,6 @@ fn print_tir(t: *TirState) !void {
 
 fn get_val(t: *TirState, tir_ref: TirInst.IndexRef) !?Value {
     switch (tir_ref) {
-        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => return error.ExpectedVal,
         .tir_true_lit => return Value{ .boolean = true },
         .tir_false_lit => return Value{ .boolean = false },
         _ => {
@@ -262,15 +279,9 @@ fn get_val(t: *TirState, tir_ref: TirInst.IndexRef) !?Value {
 }
 
 // Get the type of the resulting value of a TIR instruction reference
-fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.IndexRef {
+fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRef {
     switch (inst_ref) {
-        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8 => {
-            // const tir_type = try tir.append_type(.typ);
-            // const tir_type_inst = try tir.append_inst(TirInst{ .constant_type = tir_type });
-            return .tir_typ;
-        },
         .tir_true_lit, .tir_false_lit => return .tir_boolean,
-        .tir_typ => return error.TypeOfType,
         _ => {
             // The type of index refers to an instruction.
             // By matching on the instruction, figure out what it's type is.
@@ -279,11 +290,7 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.Inde
 
             switch (inst) {
                 .block, .br => return error.NoType,
-                .constant_type => |type_index| {
-                    const tir_type = t.types.get(type_index);
-                    _ = tir_type;
-                    return error.Unimplemented;
-                },
+                .constant_type => |type_ref| return type_ref,
                 .constant_val => |val_index| {
                     const value = t.values.get(val_index);
                     switch (value) {
@@ -298,6 +305,15 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !TirInst.Inde
                         .u64 => return .tir_u64,
                         else => return error.Unimplemented,
                     }
+                },
+                .alloca => |type_ref| return type_ref,
+                .store => |store| {
+                    const val_type = try get_tir_inst_ret_type(t, store.val);
+                    const type_index = try t.append_type(Type{ .ptr = val_type });
+                    return @enumFromInt(type_index);
+                },
+                .load => |load| {
+                    return load.type;
                 },
                 .add_i8 => return .tir_i8,
                 .add_i16 => return .tir_i16,
@@ -346,7 +362,7 @@ fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst
             },
             .br => |br_extra| {
                 const br = t.air.get_extra_struct(AirInst.Br, br_extra);
-                const tir_cond = try t.get_mapping(br.cond);
+                const tir_cond = try t.get_inst_mapping(br.cond);
                 const tir_cond_val = try get_val(t, tir_cond);
 
                 const then_blk = t.air.instructions.get(@intFromEnum(br.then_blk));
@@ -380,9 +396,9 @@ fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst
                 }
             },
             .add => |air_add| {
-                const lhs_tir_ref: TirInst.IndexRef = t.air_tir_map.get(air_add.lhs) orelse return error.MissingMapping;
+                const lhs_tir_ref: TirInst.IndexRef = t.air_tir_inst_map.get(air_add.lhs) orelse return error.MissingMapping;
                 const lhs_val = try get_val(t, lhs_tir_ref);
-                const rhs_tir_ref: TirInst.IndexRef = t.air_tir_map.get(air_add.rhs) orelse return error.MissingMapping;
+                const rhs_tir_ref: TirInst.IndexRef = t.air_tir_inst_map.get(air_add.rhs) orelse return error.MissingMapping;
                 const rhs_val = try get_val(t, rhs_tir_ref);
                 if (lhs_val) |l_val| {
                     if (rhs_val) |r_val| {
@@ -416,18 +432,21 @@ fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst
                 } else if (lhs_typ == .tir_u64 and rhs_typ == .tir_u64) {
                     res_inst = try t.append_inst(TirInst{ .add_u64 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
                 } else {
+                    print("Addition types are mismatched {} and {}\n", .{ lhs_typ, rhs_typ });
+                    print("TIR Lhs is from{} and rhs is from {}\n", .{ lhs_tir_ref, rhs_tir_ref });
+                    print("AIR Lhs is from{} and rhs is from {}\n", .{ air_add.lhs, air_add.rhs });
                     return error.AdditionTypeError;
                 }
-                try t.air_tir_map.put(@enumFromInt(air_index), res_inst);
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), res_inst);
             },
             .type_of => |air_type_inst| {
-                const tir_expr_inst = try t.get_mapping(air_type_inst);
+                const tir_expr_inst = try t.get_inst_mapping(air_type_inst);
                 const tir_expr_type = try get_tir_inst_ret_type(t, tir_expr_inst);
-                try t.air_tir_map.put(@enumFromInt(air_index), tir_expr_type);
+                try t.air_tir_type_map.put(@enumFromInt(air_index), tir_expr_type);
             },
             .type_as => |type_as| {
-                const tir_expr_ref = try t.get_mapping(type_as.expr);
-                const tir_type_ref = try t.get_mapping(type_as.type);
+                const tir_expr_ref = try t.get_inst_mapping(type_as.expr);
+                const tir_type_ref = try t.get_type_mapping(type_as.type);
                 const maybe_val = try get_val(t, tir_expr_ref);
                 switch (tir_type_ref) {
                     .tir_i8 => {
@@ -450,7 +469,7 @@ fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst
                     .tir_unknown_int => {
                         if (maybe_val) |val| {
                             if (val == .unknown_int) {
-                                try t.air_tir_map.put(@enumFromInt(air_index), tir_expr_ref);
+                                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_expr_ref);
                             } else {
                                 return error.CannotCoerceKnownToUnknown;
                             }
@@ -462,11 +481,36 @@ fn tir_gen_instructions(t: *TirState, air_start: AirInst.Index, air_end: AirInst
                     },
                 }
             },
+            .alloc => |air_alloc| {
+                const tir_alloc_type = try t.get_type_mapping(air_alloc.type);
+                const tir_alloca = try t.append_inst(.{ .alloca = tir_alloc_type });
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_alloca);
+            },
+            .load => |air_load| {
+                const tir_ptr = try t.get_inst_mapping(air_load.ptr);
+                const tir_type = try t.get_type_mapping(air_load.type);
+
+                const tir_load = try t.append_inst(TirInst{ .load = .{ .ptr = tir_ptr, .type = tir_type } });
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_load);
+            },
+            .store => |air_store| {
+                const tir_val_inst = try t.get_inst_mapping(air_store.val);
+                const tir_val_type = try get_tir_inst_ret_type(t, tir_val_inst);
+
+                const tir_ptr = try t.get_inst_mapping(air_store.ptr);
+                const tir_ptr_type = t.instructions.get(@intFromEnum(tir_ptr)).alloca;
+                if (tir_val_type != tir_ptr_type) {
+                    return error.StoringWrongType;
+                }
+
+                const tir_store = try t.append_inst(TirInst{ .store = .{ .val = tir_val_inst, .val_type = tir_val_type, .ptr = tir_ptr } });
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_store);
+            },
             .arg => |air_arg| {
-                const tir_type_ref = try t.get_mapping(air_arg.type);
+                const tir_type_ref = try t.get_type_mapping(air_arg.type);
                 const tir_arg = TirInst{ .arg = .{ .name = air_arg.name, .typ_ref = tir_type_ref } };
                 const inst_index = try t.append_inst(tir_arg);
-                try t.air_tir_map.put(@enumFromInt(air_index), inst_index);
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), inst_index);
             },
             .int => |int| {
                 const val = Value{ .unknown_int = @intCast(int) };
@@ -484,7 +528,8 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
         .scratch = std.ArrayList(u32).init(allocator),
 
         .air = air,
-        .air_tir_map = TirState.AirTirMap.init(allocator),
+        .air_tir_inst_map = TirState.AirTirInstMap.init(allocator),
+        .air_tir_type_map = TirState.AirTirTypeMap.init(allocator),
 
         .values = Value.List{},
         .types = Type.List{},
@@ -492,19 +537,18 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
         .allocator = allocator,
     };
     defer tir.deinit();
+    // try tir.air_tir_inst_map.put(AirInst.IndexRef.true_lit, TirInst.IndexRef.tir_true_lit);
+    // try tir.air_tir_inst_map.put(AirInst.IndexRef.false_lit, TirInst.IndexRef.tir_false_lit);
 
-    try tir.air_tir_map.put(AirInst.IndexRef.bool, TirInst.IndexRef.tir_boolean);
-    try tir.air_tir_map.put(AirInst.IndexRef.true_lit, TirInst.IndexRef.tir_true_lit);
-    try tir.air_tir_map.put(AirInst.IndexRef.false_lit, TirInst.IndexRef.tir_false_lit);
-    try tir.air_tir_map.put(AirInst.IndexRef.u8, TirInst.IndexRef.tir_u8);
-    try tir.air_tir_map.put(AirInst.IndexRef.u16, TirInst.IndexRef.tir_u16);
-    try tir.air_tir_map.put(AirInst.IndexRef.u32, TirInst.IndexRef.tir_u32);
-    try tir.air_tir_map.put(AirInst.IndexRef.u64, TirInst.IndexRef.tir_u64);
-
-    try tir.air_tir_map.put(AirInst.IndexRef.i8, TirInst.IndexRef.tir_i8);
-    try tir.air_tir_map.put(AirInst.IndexRef.i16, TirInst.IndexRef.tir_i16);
-    try tir.air_tir_map.put(AirInst.IndexRef.i32, TirInst.IndexRef.tir_i32);
-    try tir.air_tir_map.put(AirInst.IndexRef.i64, TirInst.IndexRef.tir_i64);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.bool, Type.IndexRef.tir_boolean);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.u8, Type.IndexRef.tir_u8);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.u16, Type.IndexRef.tir_u16);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.u32, Type.IndexRef.tir_u32);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.u64, Type.IndexRef.tir_u64);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.i8, Type.IndexRef.tir_i8);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.i16, Type.IndexRef.tir_i16);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.i32, Type.IndexRef.tir_i32);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.i64, Type.IndexRef.tir_i64);
 
     try tir_gen_instructions(&tir, 0, @intCast(tir.air.instructions.len));
     try print_tir(&tir);

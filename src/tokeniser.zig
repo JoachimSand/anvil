@@ -56,8 +56,12 @@ pub const TokenType = enum {
     keyword_if,
     keyword_mut,
     keyword_else,
+    keyword_while,
     keyword_or,
     keyword_and,
+    keyword_move,
+
+    built_in_alloc,
 };
 
 // Approx. subset of token types. Enumerates the possible characters the tokeniser
@@ -128,9 +132,12 @@ const KeywordMap = std.ComptimeStringMap(TokenType, .{
     .{ "enum", .keyword_enum },
     .{ "if", .keyword_if },
     .{ "else", .keyword_else },
+    .{ "while", .keyword_while },
     .{ "mut", .keyword_mut },
     .{ "or", .keyword_or },
     .{ "and", .keyword_and },
+    .{ "move", .keyword_move },
+    .{ "@alloc", .built_in_alloc },
 });
 
 pub const Tokeniser = struct {
@@ -192,7 +199,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
 
         switch (state) {
             .start => switch (cur_char) {
-                'A'...'Z', 'a'...'z' => state = .identifier_or_keyword,
+                'A'...'Z', 'a'...'z', '@' => state = .identifier_or_keyword,
                 '0' => {
                     state = .integer_unknown;
                 },

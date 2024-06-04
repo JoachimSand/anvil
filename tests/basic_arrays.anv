@@ -1,0 +1,6 @@
+my_array : [128]i8;
+my_arr[5] = move @alloc(1);
+
+while true |cap| {
+	c: = 2;
+}

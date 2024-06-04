@@ -142,6 +142,17 @@ pub const AirInst = union(enum) {
         lhs: IndexRef,
         rhs: IndexRef,
     },
+    alloc: struct {
+        type: IndexRef,
+    },
+    load: struct {
+        type: IndexRef,
+        ptr: IndexRef,
+    },
+    store: struct {
+        val: IndexRef,
+        ptr: IndexRef,
+    },
     // Access an argument to the function
     // TODO: Make this an extra argument and also
     // specify it's type here. Delete declinfo for functions?.
@@ -477,6 +488,15 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .arg => |arg| {
                 print("arg({s}, {})", .{ a.get_string(arg.name), arg.type });
             },
+            .alloc => |alloc| {
+                print("alloc({})", .{alloc.type});
+            },
+            .load => |load| {
+                print("load({}, {})", .{ load.type, load.ptr });
+            },
+            .store => |store| {
+                print("store({}, {})", .{ store.val, store.ptr });
+            },
             .fn_def => |fn_extra| {
                 const fn_def = a.get_extra_struct(AirInst.FnDef, fn_extra);
                 const fn_name = a.get_string(fn_def.name);
@@ -572,7 +592,16 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
                 return prim_index;
             }
             const info = try s.get_var(tok_index);
-            return info.inst;
+            if (info.mutable) {
+                const alloc_inst = s.air.instructions.get(@intFromEnum(info.inst));
+                if (alloc_inst != .alloc) {
+                    unreachable;
+                }
+                const load_inst = s.append_inst(.{ .load = .{ .ptr = info.inst, .type = alloc_inst.alloc.type } });
+                return load_inst;
+            } else {
+                return info.inst;
+            }
         },
         .integer_lit => |tok_index| {
             const lit_str = tokeniser_mod.token_to_str(s.ast.tokens.get(tok_index), s.ast.src);
@@ -598,7 +627,15 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
         type_inst = try s.append_inst(.{ .type_of = expr_inst });
     }
     const type_as_inst = try s.append_inst(.{ .type_as = .{ .type = type_inst, .expr = expr_inst } });
-    try s.push_var(id, mutable, type_as_inst, type_inst);
+
+    // allocate stack memory for mutable declarations
+    if (mutable) {
+        const alloc_inst = try s.append_inst(.{ .alloc = .{ .type = type_inst } });
+        _ = try s.append_inst(.{ .store = .{ .ptr = alloc_inst, .val = type_as_inst } });
+        try s.push_var(id, mutable, alloc_inst, type_inst);
+    } else {
+        try s.push_var(id, mutable, type_as_inst, type_inst);
+    }
 }
 
 fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index) AirError!void {

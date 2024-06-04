@@ -80,6 +80,16 @@ pub const Node = union(enum) {
     },
     if_else_statement_capture: ExtraIndex,
 
+    while_statement: struct {
+        condition: Index,
+        block: Index,
+    },
+    while_statement_capture: struct {
+        capture_ref: Index,
+        condition: Index,
+        block: Index,
+    },
+
     assignment: struct {
         token: Token.Index,
         target: Index,
@@ -142,6 +152,16 @@ pub const Node = union(enum) {
 
     field_access: struct { target: Index, field_id: Token.Index },
 
+    indexing: struct {
+        l_bracket: Token.Index,
+        target: Index,
+        index: Index,
+    },
+    slice_type: struct {
+        l_bracket: Token.Index,
+        target: Index,
+    },
+
     binary_exp: BinaryExp,
 
     prefix_exp: Prefix,
@@ -179,6 +199,7 @@ pub const Node = union(enum) {
     //     field_name: Token.Index,
     // },
     identifier: Token.Index,
+    built_in_alloc: Token.Index,
     integer_lit: Token.Index,
 
     pub const Index = u32;
@@ -647,6 +668,39 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                 }
             },
 
+            .keyword_while => {
+                const while_tok = p.next_token() catch undefined;
+                _ = while_tok;
+                const cond_expr = try parse_expr(p, 0);
+
+                // Possible capture
+                var peek = try p.peek_token();
+
+                // Capture <- "|" ReferenceOp? Identifier "|"
+                var capture: ?Node.Index = null;
+                if (peek.type == .pipe) {
+                    _ = p.next_token() catch undefined;
+                    peek = try p.peek_token();
+                    if (peek.type == .ampersand or peek.type == .ampersand2) {
+                        capture = try parse_reference(p, parse_identifier);
+                    } else {
+                        capture = try parse_identifier(p);
+                    }
+                    _ = try p.expect_token(.pipe);
+                }
+
+                const while_block = try parse_block(p);
+
+                var node: Node = undefined;
+                if (capture) |cap| {
+                    node = Node{ .while_statement_capture = .{ .capture_ref = cap, .condition = cond_expr, .block = while_block } };
+                } else {
+                    node = Node{ .while_statement = .{ .condition = cond_expr, .block = while_block } };
+                }
+                const node_index = try p.append_node(node);
+                try p.scratch.append(node_index);
+            },
+
             .keyword_if => {
 
                 // IfStatement <- "if" Expr Capture? Block ("else" (IfStatement / Block))?
@@ -820,7 +874,7 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
     return p.append_node(prefix_node);
 }
 
-// PrefixOps <- (ReferenceOp / "-" / "!")
+// PrefixOps <- (ReferenceOp / "-" / "!" / "move")
 // PrefixExpr <- PrefixOps* PostfixExpr
 
 // TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
@@ -828,7 +882,7 @@ fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
-        .minus, .not => {
+        .minus, .not, .keyword_move => {
             const token = p.next_token() catch undefined;
             const prefix_expr = try parse_prefix_expr(p);
             const prefix_node = Node{ .prefix_exp = .{ .token = token, .target = prefix_expr } };
@@ -839,13 +893,28 @@ fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
     }
 }
 
-// TypePrefixOps = ReferenceOp / "[" "]"
+// TypePrefixOps = ReferenceOp / "[" Expr? "]"
 // TypeExpr <- TypePrefixOps* PostfixExpr
 fn parse_type_expr(p: *Parser) ParseError!Node.Index {
-    const peek_tok = try p.peek_token();
-
+    var peek_tok = try p.peek_token();
     switch (peek_tok.type) {
-        .l_bracket => return error.Unimplemented,
+        .l_bracket => {
+            const l_bracket = p.next_token() catch undefined;
+            peek_tok = try p.peek_token();
+
+            if (peek_tok.type == .r_bracket) {
+                // Slice specification
+                _ = try p.expect_token(.r_bracket);
+                const slice_type_node = Node{ .slice_type = .{ .l_bracket = l_bracket.index, .target = try parse_postfix_expr(p) } };
+                return try p.append_node(slice_type_node);
+            } else {
+                // Array specification
+                const index = try parse_expr(p, 0);
+                _ = try p.expect_token(.r_bracket);
+                const indexing_node = Node{ .indexing = .{ .l_bracket = l_bracket.index, .target = try parse_postfix_expr(p), .index = index } };
+                return try p.append_node(indexing_node);
+            }
+        },
         .ampersand, .ampersand2 => return parse_reference(p, parse_type_expr),
         else => return parse_postfix_expr(p),
     }
@@ -874,6 +943,8 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         },
         .integer_bin, .integer_oct, .integer_hex, .integer_dec => primary = try p.append_node(.{ .integer_lit = tok.index }),
         .identifier => primary = try p.append_node(Node{ .identifier = tok.index }),
+        .built_in_alloc => primary = try p.append_node(Node{ .built_in_alloc = tok.index }),
+
         .dot => return error.Unimplemented,
 
         // ContainerDefinition <- ("struct" / "enum") "{" Decl* "}"
@@ -1007,7 +1078,19 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                 }
             },
 
-            .l_bracket => return error.Unimplemented,
+            .l_bracket => {
+                const l_bracket = p.next_token() catch undefined;
+                const index = try parse_expr(p, 0);
+
+                peek = try p.peek_token();
+                if (peek.type == .dot2) {
+                    return error.Unimplemented;
+                } else {
+                    _ = try p.expect_token(.r_bracket);
+                }
+                const indexing_node = Node{ .indexing = .{ .l_bracket = l_bracket.index, .target = primary, .index = index } };
+                primary = try p.append_node(indexing_node);
+            },
             else => return primary,
         }
     }

@@ -119,6 +119,17 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast(a, prefix, true, assignment.expr);
         },
 
+        .while_statement => |statement| {
+            print("while\n", .{});
+            try print_ast(a, prefix, false, statement.condition);
+            try print_ast(a, prefix, true, statement.block);
+        },
+        .while_statement_capture => |statement| {
+            print("while capture\n", .{});
+            try print_ast(a, prefix, false, statement.condition);
+            try print_ast(a, prefix, false, statement.capture_ref);
+            try print_ast(a, prefix, true, statement.block);
+        },
         .if_statement => |statement| {
             print("if\n", .{});
             try print_ast(a, prefix, false, statement.condition);
@@ -253,8 +264,17 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             print("Field access .{s}\n", .{field_name});
             try print_ast(a, prefix, true, f.target);
         },
+        .indexing => |indexing| {
+            print("Indexing\n", .{});
+            try print_ast(a, prefix, false, indexing.index);
+            try print_ast(a, prefix, true, indexing.target);
+        },
+        .slice_type => |slice_type| {
+            print("Slice type []\n", .{});
+            try print_ast(a, prefix, true, slice_type.target);
+        },
 
-        .integer_lit, .identifier => |tok_index| {
+        .integer_lit, .identifier, .built_in_alloc => |tok_index| {
             const str = a.get_tok_str(tok_index);
             print("{s} \n", .{str});
         },

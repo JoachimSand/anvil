@@ -56,12 +56,12 @@ pub fn main() !void {
     var ast = try parser.get_ast();
     try pretty_print_mod.print_ast_start(&ast, ast.root);
 
-    var air = try air_mod.air_gen(&ast);
-    defer air.deinit();
+    // var air = try air_mod.air_gen(&ast);
+    // defer air.deinit();
     // We can now free the parser contents: tokens, nodes etc.
     parser.deinit();
 
-    _ = try tir_mod.tir_gen(&air, air.allocator);
+    // _ = try tir_mod.tir_gen(&air, air.allocator);
     // print("Root node {any}\n", .{parser.nodes.items[root_id]});
     // // stdout is for the actual output of your application, for example if you
     // // are implementing gzip, then only the compressed bytes should be sent to
