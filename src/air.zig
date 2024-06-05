@@ -148,16 +148,29 @@ pub const AirInst = union(enum) {
     //     lhs: IndexRef,
     //     rhs: IndexRef,
     // },
-    alloc: struct {
+    alloca: struct {
         type: IndexRef,
     },
+
+    // Like alloca but for arrays
+    zero_array: IndexRef,
     load: struct {
         type: IndexRef,
         ptr: IndexRef,
     },
+    // extract_val: struct {
+    //     target: IndexRef,
+    //     ptr: IndexRef,
+    // },
     store: struct {
         val: IndexRef,
         ptr: IndexRef,
+    },
+    move: IndexRef,
+    address_of: IndexRef,
+    indexing: struct {
+        target: IndexRef,
+        index: IndexRef,
     },
     // Access an argument to the function
     // TODO: Make this an extra argument and also
@@ -454,6 +467,18 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .int => |int| {
                 print("int({})", .{int});
             },
+            .move => |move| {
+                print("move({})", .{move});
+            },
+            .address_of => |ad| {
+                print("address of ({})", .{ad});
+            },
+            .indexing => |id| {
+                print("indexing ({}, {})", .{ id.target, id.index });
+            },
+            .zero_array => |zero| {
+                print("zero array with type {}", .{zero});
+            },
             .add => |add| {
                 print("add(%{}, %{})", .{ add.lhs, add.rhs });
             },
@@ -507,8 +532,8 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .arg => |arg| {
                 print("arg({s}, {})", .{ a.get_string(arg.name), arg.type });
             },
-            .alloc => |alloc| {
-                print("alloc({})", .{alloc.type});
+            .alloca => |alloc| {
+                print("alloca {} ", .{alloc.type});
             },
             .load => |load| {
                 print("load({}, {})", .{ load.type, load.ptr });
@@ -607,6 +632,22 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
             };
             return s.append_inst(inst);
         },
+        .prefix_exp => |prefix| {
+            const prefix_target = try air_gen_expr(s, prefix.target);
+            switch (prefix.token.type) {
+                .keyword_move => return s.append_inst(.{ .move = prefix_target }),
+                else => return error.Unimplemented,
+            }
+        },
+        .ref => |ref| {
+            const ref_target = try air_gen_expr(s, ref.target);
+            return s.append_inst(.{ .address_of = ref_target });
+        },
+        .indexing => |indexing| {
+            const index_expr = try air_gen_expr(s, indexing.index);
+            const target = try air_gen_expr(s, indexing.target);
+            return s.append_inst(.{ .indexing = .{ .target = target, .index = index_expr } });
+        },
         .identifier => |tok_index| {
             const id_str = s.ast.get_tok_str(tok_index);
             print("Id str {s}\n", .{id_str});
@@ -615,12 +656,15 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
             }
             const info = try s.get_var(tok_index);
             if (info.mutable) {
-                const alloc_inst = s.air.instructions.get(@intFromEnum(info.inst));
-                if (alloc_inst != .alloc) {
+                const def_inst = s.air.instructions.get(@intFromEnum(info.inst));
+                if (def_inst == .alloca) {
+                    const load_inst = s.append_inst(.{ .load = .{ .ptr = info.inst, .type = def_inst.alloca.type } });
+                    return load_inst;
+                } else if (def_inst == .zero_array) {
+                    return info.inst;
+                } else {
                     unreachable;
                 }
-                const load_inst = s.append_inst(.{ .load = .{ .ptr = info.inst, .type = alloc_inst.alloc.type } });
-                return load_inst;
             } else {
                 return info.inst;
             }
@@ -639,8 +683,28 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
     }
 }
 
-fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.Index, expr: Node.Index) !void {
-    const expr_inst = try air_gen_expr(s, expr);
+fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.Index, expr: ?Node.Index) !void {
+    var expr_inst: AirInst.IndexRef = undefined;
+    if (expr) |expr_node| {
+        expr_inst = try air_gen_expr(s, expr_node);
+    } else if (type_node) |typ| {
+        // We allow type-only declarations for arrays - these are zero initialized.
+        const node = s.ast.nodes.items[typ];
+        if (node == .indexing) {
+            const type_inst = try air_gen_expr(s, typ);
+            const zero_inst = try s.append_inst(.{ .zero_array = type_inst });
+            if (mutable) {
+                // const alloc_inst = try s.append_inst(.{ .alloc = .{ .type = type_inst } });
+                // _ = try s.append_inst(.{ .store = .{ .ptr = alloc_inst, .val = zero_inst } });
+                try s.push_var(id, mutable, zero_inst, type_inst);
+            } else {
+                try s.push_var(id, mutable, zero_inst, type_inst);
+            }
+            return;
+        } else {
+            return error.Unimplemented;
+        }
+    }
 
     var type_inst: AirInst.IndexRef = undefined;
     if (type_node) |node| {
@@ -652,7 +716,7 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
 
     // allocate stack memory for mutable declarations
     if (mutable) {
-        const alloc_inst = try s.append_inst(.{ .alloc = .{ .type = type_inst } });
+        const alloc_inst = try s.append_inst(.{ .alloca = .{ .type = type_inst } });
         _ = try s.append_inst(.{ .store = .{ .ptr = alloc_inst, .val = type_as_inst } });
         try s.push_var(id, mutable, alloc_inst, type_inst);
     } else {
@@ -686,8 +750,9 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
             .var_decl_expr => |decl| try air_gen_decl(s, decl.identifier, false, null, decl.decl_expr),
             .mut_var_decl_expr => |decl| try air_gen_decl(s, decl.identifier, true, null, decl.decl_expr),
 
-            .var_decl_type => |_| return error.Unimplemented,
-            .mut_var_decl_type => |_| return error.Unimplemented,
+            // Only arrays currently support this syntax.
+            .var_decl_type => |decl| try air_gen_decl(s, decl.identifier, false, decl.decl_type, null),
+            .mut_var_decl_type => |decl| try air_gen_decl(s, decl.identifier, true, decl.decl_type, null),
 
             // .fn_decl => |fn_decl| {
             //     const fn_name = try s.intern_token(fn_decl.identifier);
