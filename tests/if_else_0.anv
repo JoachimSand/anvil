@@ -1,9 +1,7 @@
-{
-	mut b : i8 = 1;
-	if true {
-		c := 2;
-	} else {		
-		d := 3;
-	}
-	e := 4;
+mut b : i8 = 1;
+if true {
+	c := 2;
+} else {		
+	d := 3;
 }
+e := 4;

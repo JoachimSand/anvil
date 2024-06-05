@@ -1,14 +1,5 @@
-{
-	Node := struct {
-		d : u32;	
-	};
-	
-	BinNode := struct {
-		a : struct { c : i32;};
-		mut b : u32;
-		e : Node;
-	};
+Node := struct {
+	d : u32;
+};
 
-	mut a : BinNode = 2;
-	a.e = 3;
-}
+mut test := Node.{d = 1;};

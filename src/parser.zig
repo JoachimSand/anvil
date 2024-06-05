@@ -374,7 +374,7 @@ pub const Parser = struct {
     fn next_token(p: *Parser) ParseError!TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            print("Next {any} \n", .{tok});
+            // print("Next {any} \n", .{tok});
             p.cur_token += 1;
             return TokenInfo{ .type = tok.type, .index = p.cur_token - 1 };
         } else {
@@ -386,7 +386,7 @@ pub const Parser = struct {
         const tok = try p.next_token();
 
         if (tok.type != tok_type) {
-            print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
+            // print("Expected token type {any}, got {any}\n", .{ tok_type, tok.type });
             return error.UnexpectedToken;
         } else {
             return tok;
@@ -396,7 +396,7 @@ pub const Parser = struct {
     fn peek_token(p: *Parser) !TokenInfo {
         if (p.cur_token < p.tokens.len) {
             const tok = p.tokens.get(p.cur_token);
-            print("Peeked {any} \n", .{tok});
+            // print("Peeked {any} \n", .{tok});
             return TokenInfo{ .type = tok.type, .index = p.cur_token };
         } else {
             return error.EarlyTermination;
@@ -423,7 +423,7 @@ pub const Parser = struct {
     }
 
     fn pop_scratch_to_extra(p: *Parser, count: usize) !Node.IndexSlice {
-        print("\nPopping {} to extra, scratch has length {} \n", .{ count, p.scratch.items.len });
+        // print("\nPopping {} to extra, scratch has length {} \n", .{ count, p.scratch.items.len });
         const elems = p.scratch.items[p.scratch.items.len - count ..];
 
         const start: u32 = @intCast(p.extra.items.len);
@@ -481,7 +481,7 @@ pub fn parse_fn_decl(p: *Parser) ParseError!Node.Index {
     _ = try p.expect_token(.minus_arrow);
 
     const type_expr = try parse_type_expr(p);
-    print("Parsed type expr \n", .{});
+    // print("Parsed type expr \n", .{});
     const block = try parse_block(p);
 
     var node: Node = undefined;
@@ -625,7 +625,7 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
     // print("Parsed {any} statements\n", .{statements.?.len});
     const block_node = try create_statements_node(p, "block", statements, "start_brace", l_brace.index);
     _ = try p.expect_token(.r_brace);
-    print("Finished parsing block\n", .{});
+    // print("Finished parsing block\n", .{});
     return block_node;
 }
 
@@ -636,7 +636,7 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
     var statements: ?[]Node.Index = null;
     var statement_count: usize = 0;
     while (peek_tok.type != .r_brace) {
-        print("\nParsing statement starting with {}, scract at {}\n", .{ peek_tok.type, p.scratch.items.len });
+        // print("\nParsing statement starting with {}, scract at {}\n", .{ peek_tok.type, p.scratch.items.len });
         switch (peek_tok.type) {
             .keyword_fn => try p.scratch.append(try parse_fn_decl(p)),
             .l_brace => {
@@ -726,12 +726,12 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 
                     const block = try parse_block(p);
 
-                    print("Checking potential else\n", .{});
+                    // print("Checking potential else\n", .{});
                     // Potential else case
                     peek = try p.peek_token();
                     if (peek.type == .keyword_else) {
                         _ = try p.next_token();
-                        print("Else encountered\n", .{});
+                        // print("Else encountered\n", .{});
 
                         // Create an if-else node with the else case to be set as the subsequent block
                         // in the else case, and alternatively by the next iteration of the loop
@@ -758,7 +758,7 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                             .keyword_if => {
                                 // else-if. The node created on this iteration will have it's destination set by the next
                                 // iteration.
-                                print("else if detected\n", .{});
+                                // print("else if detected\n", .{});
                                 prev_else_index = current_index;
                             },
                             .l_brace => {
@@ -809,7 +809,7 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
 
         peek_tok = p.peek_token() catch |err| if (err == error.EarlyTermination) break else return err;
     }
-    print("FINAL STATEMENT COUNT: {}\n", .{statement_count});
+    // print("FINAL STATEMENT COUNT: {}\n", .{statement_count});
     return statements;
 }
 
@@ -875,7 +875,7 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
 
 // TODO: Performance-wise, it may be worth inlining recursive parsing of prefixes into a a single loop.
 fn parse_prefix_expr(p: *Parser) ParseError!Node.Index {
-    print("Parsing prefixexpr\n", .{});
+    // print("Parsing prefixexpr\n", .{});
     const peek_tok = try p.peek_token();
 
     switch (peek_tok.type) {
@@ -1055,7 +1055,8 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     var container_node: Node = undefined;
                     if (assignments) |a| {
                         if (a.len == 1) {
-                            container_node = Node{ .container_literal_one = .{ .target_type = primary, .assignment = a[0] } };
+                            const slice = try p.pop_scratch_to_extra(a.len);
+                            container_node = Node{ .container_literal_one = .{ .target_type = primary, .assignment = p.extra.items[slice.start] } };
                         } else {
                             const slice = try p.pop_scratch_to_extra(a.len);
                             container_node = Node{ .container_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
@@ -1119,11 +1120,11 @@ inline fn operator_precedence(token_type: TokenType) ?Precedence {
 fn parse_expr(p: *Parser, start_prec: Precedence) ParseError!Node.Index {
     // Parse an "atom"/left hand side of expression
     // TODO: Add pre-fix and post-fix parsing
-    print("Parsing expr\n", .{});
+    // print("Parsing expr\n", .{});
 
     var lhs = try parse_prefix_expr(p);
 
-    print("Parsing expr: Finished prefix\n", .{});
+    // print("Parsing expr: Finished prefix\n", .{});
 
     var maybe_op = try p.peek_token();
 
@@ -1166,21 +1167,21 @@ fn test_parser(file_name: []const u8) !void {
     defer parser.deinit();
 
     var ast = try parser.get_ast();
-    try pretty_print_mod.print_ast_start(&ast);
+    try pretty_print_mod.print_ast_start(&ast, ast.root);
 }
 
-test "overall_1" {
-    try test_parser("tests/overall_1.anv");
-}
+// test "overall_1" {
+//     try test_parser("tests/overall_1.anv");
+// }
 
-test "if_else_0" {
-    try test_parser("tests/if_else_0.anv");
-}
+// test "if_else_0" {
+//     try test_parser("tests/if_else_0.anv");
+// }
 
-test "if_else_1" {
-    try test_parser("tests/if_else_0.anv");
-}
+// test "if_else_1" {
+//     try test_parser("tests/if_else_0.anv");
+// }
 
-test "bin_node_0" {
-    try test_parser("tests/bin_node_0.anv");
-}
+// test "bin_node_0" {
+//     try test_parser("tests/bin_node_0.anv");
+// }

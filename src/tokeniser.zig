@@ -157,7 +157,7 @@ pub const Tokeniser = struct {
                 }
             };
             try tok_list.append(allocator, .{ .type = tok.type, .start = tok.start });
-            print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
+            // print("Got token type {any} at {any}..{any}\n", .{ tok.type, tok.start, tok.end });
         }
         return tok_list;
     }

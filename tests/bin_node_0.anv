@@ -1,6 +1,4 @@
-{
-	BinNode := struct {
-		a : u32;
-		b : u32;
-	};
-}
+BinNode := struct {
+	a : u32;
+	b : u32;
+};

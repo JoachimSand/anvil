@@ -471,7 +471,8 @@ fn get_aggregate_type(t: *TirState, type_ref: Type.IndexRef) !Type.TirStruct {
                     return tir_struct;
                 },
                 else => {
-                    print("Expected aggregrate type, got {}", .{tir_type});
+                    print("Expected aggregrate type, got ", .{});
+                    try print_type(t, type_ref);
                     return error.ExpectedAggregrateType;
                 },
             }
@@ -1049,7 +1050,11 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                             }
                         },
                         else => {
-                            print("Type as for {} not impl.\n", .{tir_type_ref});
+                            print("Val : {}\n", .{val});
+
+                            print("Type as for ", .{});
+                            try print_type(t, tir_type_ref);
+                            print(" not impl.\n", .{});
                             return error.Unimplemented;
                         },
                     }
