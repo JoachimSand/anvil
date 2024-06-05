@@ -1,3 +1,5 @@
-mut my_array : [128]i8;
+type_alias := u8;
+
+mut my_array : [128]type_alias;
 
 c:= my_array[5];

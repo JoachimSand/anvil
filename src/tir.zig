@@ -206,6 +206,13 @@ const TirState = struct {
         try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_index);
     }
 
+    // fn append_constant_type(t: *TirState, val: Value, air_index: AirInst.Index) !void {
+    //     const val_index = try t.append_val(val);
+    //     const tir_inst = TirInst{ .constant_val = val_index };
+    //     const tir_index = try t.append_inst(tir_inst);
+    //     try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_index);
+    // }
+
     fn deinit(t: *TirState) void {
         t.instructions.deinit(t.allocator);
         t.extra.deinit();
@@ -769,13 +776,42 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 try t.air_tir_inst_map.put(@enumFromInt(air_index), res_inst);
             },
             .type_of => |air_type_inst| {
-                const tir_expr_inst = try t.get_inst_mapping(air_type_inst);
-                const tir_expr_type = try get_tir_inst_ret_type(t, tir_expr_inst);
-                try t.air_tir_type_map.put(@enumFromInt(air_index), tir_expr_type);
+                const maybe_mapped_type: ?Type.IndexRef = t.get_type_mapping(air_type_inst) catch null;
+                if (maybe_mapped_type) |mapped_type| {
+                    print("Made it here4, mapped_type {}\n", .{mapped_type});
+                    try t.air_tir_type_map.put(@enumFromInt(air_index), .tir_typ);
+                } else {
+                    const tir_expr_inst = try t.get_inst_mapping(air_type_inst);
+                    const tir_expr_type = try get_tir_inst_ret_type(t, tir_expr_inst);
+                    try t.air_tir_type_map.put(@enumFromInt(air_index), tir_expr_type);
+                }
             },
             .type_as => |type_as| {
-                const tir_expr_ref = try t.get_inst_mapping(type_as.expr);
                 const tir_type_ref = try t.get_type_mapping(type_as.type);
+
+                // An expression might evaluate to a type
+                print("Expr is {}\n", .{type_as.expr});
+                const maybe_expr_type = t.get_type_mapping(type_as.expr) catch null;
+                print("Type mapping {any}\n", .{maybe_expr_type});
+                if (maybe_expr_type) |expr_type| {
+                    print("Made it here\n", .{});
+                    switch (expr_type) {
+                        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8 => {
+                            print("Made it here2\n", .{});
+                            if (tir_type_ref == .tir_typ) {
+                                print("Made it here3\n", .{});
+                                try t.air_tir_type_map.put(@enumFromInt(air_index), expr_type);
+                                const expr_type_inst = try t.append_inst(.{ .constant_type = expr_type });
+                                try t.air_tir_inst_map.put(@enumFromInt(air_index), expr_type_inst);
+                                continue;
+                            }
+                        },
+                        .tir_typ => return error.TypeOfType,
+                        _ => return error.Unimplemented,
+                    }
+                }
+                // Otherwise, the expression is a comptime value or runtime value
+                const tir_expr_ref = try t.get_inst_mapping(type_as.expr);
                 const maybe_val = try get_val(t, tir_expr_ref);
                 if (maybe_val) |val| {
                     switch (tir_type_ref) {
@@ -864,7 +900,9 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
 
                 if (tir_target_inst) |inst| {
                     // We are indexing into a value
+                    // TODO: FIX THIS, TOO EAGER CASE
                     const target_inst = try get_tir_inst_ret_type(t, inst);
+                    print("Target inst: {}\n", .{target_inst});
                     const target_type = t.types.get(@intFromEnum(target_inst));
                     if (target_type != .array) {
                         return error.IndexIntoNonArrayType;
@@ -945,6 +983,7 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     try tir.air_tir_type_map.put(AirInst.IndexRef.i16, Type.IndexRef.tir_i16);
     try tir.air_tir_type_map.put(AirInst.IndexRef.i32, Type.IndexRef.tir_i32);
     try tir.air_tir_type_map.put(AirInst.IndexRef.i64, Type.IndexRef.tir_i64);
+    try tir.air_tir_type_map.put(AirInst.IndexRef.type, Type.IndexRef.tir_typ);
 
     const topmost_air = tir.air.instructions.get(0);
     std.debug.assert(topmost_air == .block);
