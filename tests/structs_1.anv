@@ -1,0 +1,7 @@
+
+BinNode := struct {
+	a : u32;
+	b : u32;
+};
+
+mut node := BinNode.{a = 93; b = 94; };

@@ -1,6 +1,14 @@
 {
+	Node := struct {
+		d : u32;	
+	};
+	
 	BinNode := struct {
 		a : struct { c : i32;};
-		b : u32;
+		mut b : u32;
+		e : Node;
 	};
+
+	mut a : BinNode = 2;
+	a.e = 3;
 }

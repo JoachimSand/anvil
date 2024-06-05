@@ -29,17 +29,42 @@ const AirInst = air_mod.AirInst;
 const Type = union(enum) {
     const Index = u32;
     const IndexRef = enum(Index) { tir_boolean = 4294967040, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_typ, _ };
+
     const List = std.MultiArrayList(Type);
-    const Field = struct { var_name: Air.StringIndex, field_type: Type.Index };
+    const Field = struct { var_name: Air.StringIndex, field_type: Type.IndexRef };
+
+    const TirStruct = struct {
+        fields_start: Index,
+        fields_end: Index,
+    };
 
     ptr: Type.IndexRef,
-    // type_struct: []Field,
-    array: struct {
+    tir_struct: TirStruct,
+    tir_struct_field: Field,
+    tir_mut_struct_field: Field,
+
+    tir_array: struct {
         size: u32,
         element_type: Type.IndexRef,
     },
 };
 
+fn type_ref_eq(t: *TirState, a: Type.IndexRef, b: Type.IndexRef) bool {
+    if (a == b) {
+        return true;
+    } else {
+        const a_type = t.types.get(@intFromEnum(a));
+        const b_type = t.types.get(@intFromEnum(b));
+
+        // We may create new pointer types on the fly
+        if (a_type == .ptr and b_type == .ptr) {
+            if (a_type.ptr == b_type.ptr) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
 //Compile-time known values.
 const Value = union(enum) {
     const Index = u32;
@@ -102,6 +127,12 @@ const TirInst = union(enum) {
         val_type: Type.IndexRef,
         ptr: IndexRef,
     },
+    get_element_ptr: struct {
+        aggregate_ptr: IndexRef,
+        aggregate_type: Type.IndexRef,
+        indeces_start: TirState.ExtraIndex,
+        indeces_end: TirState.ExtraIndex,
+    },
     move: Index,
 
     add_i8: BinOp,
@@ -139,6 +170,8 @@ const TirSpecificError = error{
     CannotCoerceKnownToUnknown,
     IndexIntoNonArrayType,
     ArrayTypeMustHaveKnownSize,
+    PtrIsNotPtrType,
+    ExpectedAggregrateType,
     StoringWrongType,
 };
 
@@ -148,8 +181,10 @@ const TirState = struct {
     const AirTirInstMap = std.AutoHashMap(AirInst.IndexRef, TirInst.IndexRef);
     const AirTirTypeMap = std.AutoHashMap(AirInst.IndexRef, Type.IndexRef);
 
+    const ExtraIndex = u32;
+
     instructions: TirInst.List,
-    extra: std.ArrayList(TirInst.IndexRef),
+    extra: std.ArrayList(u32),
     scratch: std.ArrayList(u32),
 
     air: *Air,
@@ -226,10 +261,58 @@ const TirState = struct {
     }
 };
 
+fn print_type(t: *TirState, type_ref: Type.IndexRef) !void {
+    switch (type_ref) {
+        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => {
+            print("{s}", .{@tagName(type_ref)});
+        },
+        _ => {
+            const typ = t.types.get(@intFromEnum(type_ref));
+            switch (typ) {
+                .ptr => |ptr| {
+                    print("&", .{});
+                    try print_type(t, ptr);
+                },
+                .tir_array => |array| {
+                    print("[{}]", .{array.size});
+                    try print_type(t, array.element_type);
+                },
+                .tir_struct => |tir_struct| {
+                    print("struct (", .{});
+
+                    var cur_field_index = tir_struct.fields_start;
+                    while (cur_field_index <= tir_struct.fields_end) : (cur_field_index += 1) {
+                        const cur_field = t.types.get(cur_field_index);
+                        switch (cur_field) {
+                            .tir_struct_field => |field| {
+                                const field_name = t.air.get_string(field.var_name);
+                                const field_type = field.field_type;
+                                print("{s} : ", .{field_name});
+                                try print_type(t, field_type);
+                                print(", ", .{});
+                            },
+                            .tir_mut_struct_field => |field| {
+                                const field_name = t.air.get_string(field.var_name);
+                                const field_type = field.field_type;
+                                print("mut {s} : ", .{field_name});
+                                try print_type(t, field_type);
+                                print(", ", .{});
+                            },
+                            else => unreachable,
+                        }
+                    }
+                    print(")", .{});
+                },
+                else => return error.Unimplemented,
+            }
+        },
+    }
+}
+
 fn print_tir(t: *TirState, start: u32, stop: u32, indent: u32) !void {
     // print("---------- TIR -------------\n", .{});
     var index: u32 = start;
-    while (index <= stop) {
+    while (index <= stop and index < t.instructions.len) {
         for (0..indent) |_| {
             print("    ", .{});
         }
@@ -242,18 +325,7 @@ fn print_tir(t: *TirState, start: u32, stop: u32, indent: u32) !void {
             // },
             .constant_type => |type_index| {
                 print("constant_type(", .{});
-                switch (type_index) {
-                    .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => {
-                        print("{s}", .{@tagName(type_index)});
-                    },
-                    _ => {
-                        const typ = t.types.get(@intFromEnum(type_index));
-                        switch (typ) {
-                            .ptr => |ptr| print("ptr to {}", .{ptr}),
-                            .array => |array| print("[{}] {}", .{ array.size, array.element_type }),
-                        }
-                    },
-                }
+                try print_type(t, type_index);
                 print(")", .{});
             },
             .constant_val => |val_index| {
@@ -304,22 +376,40 @@ fn print_tir(t: *TirState, start: u32, stop: u32, indent: u32) !void {
             },
 
             .alloca => |alloca_type| {
-                print("alloca {}", .{alloca_type});
+                print("alloca ", .{});
+                try print_type(t, alloca_type);
+            },
+            .get_element_ptr => |get_elem_ptr| {
+                print("get_element_ptr ", .{});
+                try print_type(t, get_elem_ptr.aggregate_type);
+                print(", from {} by ", .{get_elem_ptr.aggregate_ptr});
+                var extra_index = get_elem_ptr.indeces_start;
+                while (extra_index <= get_elem_ptr.indeces_end) : (extra_index += 1) {
+                    const field_index = t.extra.items[extra_index];
+                    print("{}, ", .{field_index});
+                }
             },
             .zero_array => |zero_array_type| {
-                print("zero_array {}", .{zero_array_type});
+                print("zero_array of ", .{});
+                try print_type(t, zero_array_type);
             },
             .index => |indexing| {
-                print("indexing {} with {} yielding type {}", .{ indexing.target, indexing.index, indexing.elem_type });
+                print("indexing {} with {} yielding type ", .{ indexing.target, indexing.index });
+                try print_type(t, indexing.elem_type);
             },
             .constant_index => |indexing| {
-                print("indexing {} with {} yielding type {}", .{ indexing.target, indexing.index, indexing.elem_type });
+                print("indexing {} with {} yielding type ", .{ indexing.target, indexing.index });
+                try print_type(t, indexing.elem_type);
             },
             .load => |load| {
-                print("load {}, {}", .{ load.type, load.ptr });
+                print("load ", .{});
+                try print_type(t, load.type);
+                print(", {}", .{load.ptr});
             },
             .store => |store| {
-                print("store {} from {}, {}", .{ store.val_type, store.val, store.ptr });
+                print("store ", .{});
+                try print_type(t, store.val_type);
+                print(" from {}, {}", .{ store.val, store.ptr });
             },
             .arg => |arg| {
                 print("arg(%{}, %{})", .{ arg.typ_ref, arg.name });
@@ -367,6 +457,28 @@ fn get_val(t: *TirState, tir_ref: TirInst.IndexRef) !?Value {
     }
 }
 
+fn get_aggregate_type(t: *TirState, type_ref: Type.IndexRef) !Type.TirStruct {
+    switch (type_ref) {
+        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => {
+            print("Expected aggregrate type, got {}", .{type_ref});
+            return error.ExpectedAggregrateType;
+        },
+        _ => {
+            const tir_type = t.types.get(@intFromEnum(type_ref));
+            switch (tir_type) {
+                .tir_array => return error.Unimplemented,
+                .tir_struct => |tir_struct| {
+                    return tir_struct;
+                },
+                else => {
+                    print("Expected aggregrate type, got {}", .{tir_type});
+                    return error.ExpectedAggregrateType;
+                },
+            }
+        },
+    }
+}
+
 // Get the type of the resulting value of a TIR instruction reference
 fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRef {
     switch (inst_ref) {
@@ -397,7 +509,10 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
                         else => return error.Unimplemented,
                     }
                 },
-                .alloca => |type_ref| return type_ref,
+                .alloca => |type_ref| {
+                    const type_index = try t.append_type(Type{ .ptr = type_ref });
+                    return @enumFromInt(type_index);
+                },
                 .zero_array => |type_ref| return type_ref,
                 .constant_index => |index| return index.elem_type,
                 .index => |index| return index.elem_type,
@@ -410,10 +525,35 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
                 .load => |load| {
                     return load.type;
                 },
+                .get_element_ptr => |get_elem_ptr| {
+                    // const aggregate_typ = get_elem_ptr.aggregate_type;
+                    var cur_struct = try get_aggregate_type(t, get_elem_ptr.aggregate_type);
+
+                    var extra_index = get_elem_ptr.indeces_start;
+                    while (extra_index <= get_elem_ptr.indeces_end) : (extra_index += 1) {
+                        const field_index = t.extra.items[extra_index];
+                        const field_type = t.types.get(cur_struct.fields_start + field_index);
+                        switch (field_type) {
+                            .tir_struct_field, .tir_mut_struct_field => |field| {
+                                if (extra_index != get_elem_ptr.indeces_end) {
+                                    cur_struct = try get_aggregate_type(t, field.field_type);
+                                } else {
+                                    const type_index = try t.append_type(Type{ .ptr = field.field_type });
+                                    return @enumFromInt(type_index);
+                                }
+                            },
+                            else => unreachable,
+                        }
+
+                        // const aggre
+                    }
+                    unreachable;
+                },
                 .move => |move| {
                     const val_type = try get_tir_inst_ret_type(t, @enumFromInt(move));
-                    const type_index = try t.append_type(Type{ .ptr = val_type });
-                    return @enumFromInt(type_index);
+                    return val_type;
+                    // const type_index = try t.append_type(Type{ .ptr = val_type });
+                    // return @enumFromInt(type_index);
                 },
                 .add_i8 => return .tir_i8,
                 .add_i16 => return .tir_i16,
@@ -525,8 +665,8 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
     while (air_index < t.air.instructions.len) : (air_index += 1) {
         print("\nGenerating TIR for AIR instruction {}\n", .{air_index});
         try air_mod.print_air(t.air, air_index, air_index + 1, 0);
-        // print("TIR so far:", .{});
-        // try print_tir(t, 0, @intCast(t.instructions.len), 0);
+        print("TIR so far:\n", .{});
+        try print_tir(t, 0, @intCast(t.instructions.len), 0);
 
         const air_inst = air_instructions.get(air_index);
         switch (air_inst) {
@@ -543,6 +683,77 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
 
                 return error.Unimplemented;
                 // _ = fn_def;
+            },
+            .struct_def => |air_struct_def| {
+                const type_info = @typeInfo(AirInst.DeclInfo);
+                const decl_info_field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
+                var extra = air_struct_def.start;
+                const tir_fields_start: Type.Index = @intCast(t.types.len);
+                while (extra < air_struct_def.end) {
+                    const field_info = t.air.get_extra_struct(AirInst.DeclInfo, extra);
+                    const tir_field_type = try t.get_type_mapping(field_info.type_inst);
+                    var tir_struct_field: Type = undefined;
+                    if (field_info.mutable) {
+                        tir_struct_field = Type{ .tir_mut_struct_field = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
+                    } else {
+                        tir_struct_field = Type{ .tir_struct_field = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
+                    }
+
+                    _ = try t.append_type(tir_struct_field);
+
+                    extra += decl_info_field_count;
+                }
+                const tir_fields_end: Type.Index = @intCast(t.types.len - 1);
+                const tir_struct = Type{ .tir_struct = .{ .fields_start = tir_fields_start, .fields_end = tir_fields_end } };
+                const tir_struct_type_index = try t.append_type(tir_struct);
+                try t.air_tir_type_map.put(@enumFromInt(air_index), @enumFromInt(tir_struct_type_index));
+            },
+            .get_element_ptr => |air_extra| {
+                const air_get_elem = t.air.get_extra_struct(AirInst.GetElementPtr, air_extra);
+                const tir_aggregate_inst = try t.get_inst_mapping(air_get_elem.aggregate_ptr);
+
+                print("Tir aggregrate inst {}\n", .{tir_aggregate_inst});
+                const tir_aggregate_type_ref = try get_tir_inst_ret_type(t, tir_aggregate_inst);
+                const tir_aggregate_type = t.types.get(@intFromEnum(tir_aggregate_type_ref)).ptr;
+                const tir_struct = try get_aggregate_type(t, tir_aggregate_type);
+
+                const access_field_indeces_start: TirState.ExtraIndex = @intCast(t.extra.items.len);
+
+                var cur_access_field = air_get_elem.fields.start;
+                while (cur_access_field <= air_get_elem.fields.end) : (cur_access_field += 1) {
+                    const access_field_name: Air.StringIndex = t.air.extra.items[cur_access_field];
+                    // const field_index
+
+                    // The numerical index of the field access. If the the field is the first in
+                    // in the aggregate, this would 0, second would be 1 etc.
+                    var access_field_index: ?u32 = null;
+
+                    // TODO, change tir_struct for multiple field accesses.
+                    var struct_field_index = tir_struct.fields_start;
+                    while (struct_field_index <= tir_struct.fields_end) : (struct_field_index += 1) {
+                        const cur_field = t.types.get(struct_field_index);
+                        switch (cur_field) {
+                            .tir_struct_field, .tir_mut_struct_field => |struct_field| {
+                                if (struct_field.var_name == access_field_name) {
+                                    access_field_index = struct_field_index;
+                                    break;
+                                }
+                            },
+                            else => unreachable,
+                        }
+                    }
+
+                    if (access_field_index) |a_index| {
+                        try t.extra.append(a_index);
+                    } else {
+                        unreachable;
+                    }
+                }
+                const access_field_indeces_end: TirState.ExtraIndex = @intCast(t.extra.items.len - 1);
+
+                const tir_get_elem = TirInst{ .get_element_ptr = .{ .aggregate_ptr = tir_aggregate_inst, .aggregate_type = tir_aggregate_type, .indeces_start = access_field_indeces_start, .indeces_end = access_field_indeces_end } };
+                const tir_get_elem_inst = try t.append_inst(tir_get_elem);
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_get_elem_inst);
             },
             .br => |br| {
                 const air_dst: AirInst.Index = @intFromEnum(br);
@@ -749,7 +960,7 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 const lhs_typ = try get_tir_inst_ret_type(t, lhs_tir_ref);
                 const rhs_typ = try get_tir_inst_ret_type(t, rhs_tir_ref);
                 var res_inst: TirInst.IndexRef = undefined;
-                // TODO: Just performan direct comparison
+                // TODO: Just perform an direct comparison
 
                 if (lhs_typ == .tir_i8 and rhs_typ == .tir_i8) {
                     res_inst = try t.append_inst(TirInst{ .add_i8 = .{ .lhs = lhs_tir_ref, .rhs = rhs_tir_ref } });
@@ -797,17 +1008,20 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                     print("Made it here\n", .{});
                     switch (expr_type) {
                         .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8 => {
-                            print("Made it here2\n", .{});
                             if (tir_type_ref == .tir_typ) {
-                                print("Made it here3\n", .{});
                                 try t.air_tir_type_map.put(@enumFromInt(air_index), expr_type);
-                                // const expr_type_inst = try t.append_inst(.{ .constant_type = expr_type });
-                                // try t.air_tir_inst_map.put(@enumFromInt(air_index), expr_type_inst);
                                 continue;
                             }
                         },
                         .tir_typ => return error.TypeOfType,
-                        _ => return error.Unimplemented,
+                        _ => {
+                            if (tir_type_ref == .tir_typ) {
+                                try t.air_tir_type_map.put(@enumFromInt(air_index), expr_type);
+                                const expr_type_inst = try t.append_inst(.{ .constant_type = expr_type });
+                                try t.air_tir_inst_map.put(@enumFromInt(air_index), expr_type_inst);
+                                continue;
+                            }
+                        },
                     }
                 }
                 // Otherwise, the expression is a comptime value or runtime value
@@ -841,7 +1055,12 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                     }
                 } else {
                     const expr_type = try get_tir_inst_ret_type(t, tir_expr_ref);
-                    if (expr_type == tir_type_ref) {
+                    print("Expr type: \n", .{});
+                    try print_type(t, expr_type);
+
+                    print("\nTir type ref: \n", .{});
+                    try print_type(t, tir_type_ref);
+                    if (type_ref_eq(t, expr_type, tir_type_ref)) {
                         try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_expr_ref);
                     } else {
                         return error.Unimplemented;
@@ -865,22 +1084,44 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
             },
             .load => |air_load| {
                 const tir_ptr = try t.get_inst_mapping(air_load.ptr);
-                const tir_type = try t.get_type_mapping(air_load.type);
+                const tir_ptr_type = try get_tir_inst_ret_type(t, tir_ptr);
+                print("Loading from inst {} with type {}\n", .{ tir_ptr, tir_ptr_type });
+                switch (tir_ptr_type) {
+                    .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => {
+                        return error.PtrIsNotPtrType;
+                    },
+                    _ => {
+                        const tir_type = t.types.get(@intFromEnum(tir_ptr_type));
+                        switch (tir_type) {
+                            .ptr => |pointed_to_type| {
+                                const tir_load = try t.append_inst(TirInst{ .load = .{ .ptr = tir_ptr, .type = pointed_to_type } });
+                                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_load);
+                            },
+                            else => return error.PtrIsNotPtrType,
+                        }
+                    },
+                }
 
-                const tir_load = try t.append_inst(TirInst{ .load = .{ .ptr = tir_ptr, .type = tir_type } });
-                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_load);
+                // const tir_type = try t.get_type_mapping(air_load.type);
+
             },
             .store => |air_store| {
                 const tir_val_inst = try t.get_inst_mapping(air_store.val);
                 const tir_val_type = try get_tir_inst_ret_type(t, tir_val_inst);
 
-                const tir_ptr = try t.get_inst_mapping(air_store.ptr);
-                const tir_ptr_type = t.instructions.get(@intFromEnum(tir_ptr)).alloca;
-                if (tir_val_type != tir_ptr_type) {
+                const tir_ptr_inst = try t.get_inst_mapping(air_store.ptr);
+                const tir_ptr_type = try get_tir_inst_ret_type(t, tir_ptr_inst);
+
+                print("tir_ptr_inst {}\n", .{tir_ptr_inst});
+                print("tir_ptr_type {}\n", .{tir_ptr_type});
+                const tir_pointed_to_type = t.types.get(@intFromEnum(tir_ptr_type)).ptr;
+                print("Tir val type {}, tir_pointed_to_type {}\n\n", .{ tir_val_type, tir_pointed_to_type });
+
+                if (type_ref_eq(t, tir_val_type, tir_pointed_to_type) == false) {
                     return error.StoringWrongType;
                 }
 
-                const tir_store = try t.append_inst(TirInst{ .store = .{ .val = tir_val_inst, .val_type = tir_val_type, .ptr = tir_ptr } });
+                const tir_store = try t.append_inst(TirInst{ .store = .{ .val = tir_val_inst, .val_type = tir_val_type, .ptr = tir_ptr_inst } });
                 try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_store);
             },
             .move => |air_move| {
@@ -903,10 +1144,10 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                     const target_inst = try get_tir_inst_ret_type(t, inst);
                     print("Target inst: {}\n", .{target_inst});
                     const target_type = t.types.get(@intFromEnum(target_inst));
-                    if (target_type != .array) {
+                    if (target_type != .tir_array) {
                         return error.IndexIntoNonArrayType;
                     }
-                    const element_type = target_type.array.element_type;
+                    const element_type = target_type.tir_array.element_type;
 
                     // Check if the index is comptime available
                     const tir_index_expr = try t.get_inst_mapping(indexing.index);
@@ -934,7 +1175,7 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                             return error.Unimplemented;
                         }
 
-                        const array_type = Type{ .array = .{ .size = @intCast(val.unknown_int), .element_type = typ } };
+                        const array_type = Type{ .tir_array = .{ .size = @intCast(val.unknown_int), .element_type = typ } };
                         const type_index = try t.append_type(array_type);
                         const type_inst = try t.append_inst(.{ .constant_type = @enumFromInt(type_index) });
                         try t.air_tir_inst_map.put(@enumFromInt(air_index), type_inst);
@@ -957,7 +1198,7 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
 pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     var tir = TirState{
         .instructions = TirInst.List{},
-        .extra = std.ArrayList(TirInst.IndexRef).init(allocator),
+        .extra = std.ArrayList(u32).init(allocator),
         .scratch = std.ArrayList(u32).init(allocator),
 
         .air = air,

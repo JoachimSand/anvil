@@ -36,32 +36,12 @@ pub const Node = union(enum) {
     // Index to FnDeclFull
     fn_decl_full: ExtraIndex,
 
-    var_decl_type: struct {
-        identifier: Token.Index,
-        decl_type: Index,
-    },
-    var_decl_expr: struct {
-        identifier: Token.Index,
-        decl_expr: u32,
-    },
-    var_decl_full: struct {
-        identifier: Token.Index,
-        decl_type: Index,
-        decl_expr: Index,
-    },
-    mut_var_decl_type: struct {
-        identifier: Token.Index,
-        decl_type: Index,
-    },
-    mut_var_decl_expr: struct {
-        identifier: Token.Index,
-        decl_expr: u32,
-    },
-    mut_var_decl_full: struct {
-        identifier: Token.Index,
-        decl_type: Index,
-        decl_expr: Index,
-    },
+    var_decl_type: VarDeclType,
+    var_decl_expr: VarDeclExpr,
+    var_decl_full: VarDeclFull,
+    mut_var_decl_type: VarDeclType,
+    mut_var_decl_expr: VarDeclExpr,
+    mut_var_decl_full: VarDeclFull,
 
     // TODO: For future error reporting we would like to store the location of the if_token
     if_statement: struct {
@@ -90,11 +70,7 @@ pub const Node = union(enum) {
         block: Index,
     },
 
-    assignment: struct {
-        token: Token.Index,
-        target: Index,
-        expr: Index,
-    },
+    assignment: Assignment,
 
     block: struct {
         start_brace: Token.Index,
@@ -139,8 +115,8 @@ pub const Node = union(enum) {
 
     container_literal: struct {
         target_type: Index,
-        assignments_start: Index,
-        assignments_end: Index,
+        assignments_start: ExtraIndex,
+        assignments_end: ExtraIndex,
     },
     container_literal_one: struct {
         target_type: Index,
@@ -240,6 +216,26 @@ pub const Node = union(enum) {
         target: Index,
         args: IndexSlice,
         start_paren: Token.Index,
+    };
+
+    const VarDeclType = struct {
+        identifier: Token.Index,
+        decl_type: Index,
+    };
+    const VarDeclExpr = struct {
+        identifier: Token.Index,
+        decl_expr: u32,
+    };
+    const VarDeclFull = struct {
+        identifier: Token.Index,
+        decl_type: Index,
+        decl_expr: u32,
+    };
+
+    pub const Assignment = struct {
+        token: Token.Index,
+        target: Index,
+        expr: Index,
     };
 
     pub const IfElseCapture = struct {
