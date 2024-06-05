@@ -112,17 +112,22 @@ pub const Node = union(enum) {
     enum_definition_empty: struct {
         enum_keyword: Token.Index,
     },
+    enum_literal: struct {
+        enum_target: Index,
+        active_identifier: Token.Index,
+        expr: Index,
+    },
 
-    container_literal: struct {
+    struct_literal: struct {
         target_type: Index,
         assignments_start: ExtraIndex,
         assignments_end: ExtraIndex,
     },
-    container_literal_one: struct {
+    struct_literal_one: struct {
         target_type: Index,
         assignment: Index,
     },
-    container_literal_empty: struct {
+    struct_literal_empty: struct {
         target_type: Index,
     },
 
@@ -1029,7 +1034,7 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                 peek = try p.peek_token();
                 if (peek.type == .l_brace) {
                     _ = p.next_token() catch undefined;
-                    // Container literal
+                    // Struct literal
                     var assignments: ?[]Node.Index = null;
                     // print("Got to containter literal \n", .{});
                     peek = try p.peek_token();
@@ -1052,20 +1057,20 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     }
                     _ = try p.expect_token(.r_brace);
 
-                    var container_node: Node = undefined;
+                    var struct_node: Node = undefined;
                     if (assignments) |a| {
                         if (a.len == 1) {
                             const slice = try p.pop_scratch_to_extra(a.len);
-                            container_node = Node{ .container_literal_one = .{ .target_type = primary, .assignment = p.extra.items[slice.start] } };
+                            struct_node = Node{ .struct_literal_one = .{ .target_type = primary, .assignment = p.extra.items[slice.start] } };
                         } else {
                             const slice = try p.pop_scratch_to_extra(a.len);
-                            container_node = Node{ .container_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
+                            struct_node = Node{ .struct_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
                         }
                     } else {
-                        container_node = Node{ .container_literal_empty = .{ .target_type = primary } };
+                        struct_node = Node{ .struct_literal_empty = .{ .target_type = primary } };
                     }
 
-                    primary = try p.append_node(container_node);
+                    primary = try p.append_node(struct_node);
                 } else if (peek.type == .identifier) {
                     // Field access
                     const field_tok = p.next_token() catch undefined;
@@ -1074,6 +1079,17 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                 } else {
                     return error.UnexpectedToken;
                 }
+            },
+            .colon2 => {
+                // enum literal
+                _ = p.next_token() catch undefined;
+                const active_id = try p.expect_token(.identifier);
+                _ = try p.expect_token(.l_brace);
+                const expr = try parse_expr(p, 0);
+                _ = try p.expect_token(.r_brace);
+
+                const enum_lit = Node{ .enum_literal = .{ .enum_target = primary, .active_identifier = active_id.index, .expr = expr } };
+                primary = try p.append_node(enum_lit);
             },
 
             .l_bracket => {

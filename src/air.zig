@@ -108,6 +108,10 @@ pub const AirInst = union(enum) {
         aggregate_ptr: IndexRef,
         fields: ExtraSlice,
     };
+    pub const ContainerDef = struct {
+        start: Air.ExtraIndex,
+        end: Air.ExtraIndex,
+    };
     pub const FnDef = packed struct {
         name: Air.StringIndex,
         params: ExtraSlice,
@@ -115,10 +119,8 @@ pub const AirInst = union(enum) {
         blk: IndexRef,
     };
     fn_def: Air.ExtraIndex,
-    struct_def: struct {
-        start: Air.ExtraIndex,
-        end: Air.ExtraIndex,
-    },
+    struct_def: ContainerDef,
+    enum_def: ContainerDef,
 
     block: struct {
         start: IndexRef,
@@ -516,10 +518,14 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 }
                 print("}}", .{});
             },
-            .struct_def => |def| {
+            .struct_def, .enum_def => |def| {
                 const type_info = @typeInfo(AirInst.DeclInfo);
                 const field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
-                print("struct def (", .{});
+                if (inst == .struct_def) {
+                    print("struct def (", .{});
+                } else {
+                    print("enum def (", .{});
+                }
                 var extra = def.start;
                 while (extra < def.end) {
                     const field_info = a.get_extra_struct(AirInst.DeclInfo, extra);
@@ -617,7 +623,13 @@ fn air_gen_struct_def(s: *AirState, d_indeces: []const Node.Index) AirError!AirI
     return s.append_inst(inst);
 }
 
-fn air_gen_container_lit(s: *AirState, target_type_index: Node.Index, assignments: []const Node.Index) AirError!AirInst.IndexRef {
+fn air_gen_enum_def(s: *AirState, d_indeces: []const Node.Index) AirError!AirInst.IndexRef {
+    const decl_list = try air_gen_decl_info_list(s, d_indeces);
+    const inst = AirInst{ .enum_def = .{ .start = decl_list.start, .end = decl_list.end } };
+    return s.append_inst(inst);
+}
+
+fn air_gen_struct_lit(s: *AirState, target_type_index: Node.Index, assignments: []const Node.Index) AirError!AirInst.IndexRef {
     const container_type = try air_gen_expr(s, target_type_index);
     const alloc_inst = try s.append_inst(AirInst{ .alloca = .{ .type = container_type } });
 
@@ -671,11 +683,19 @@ fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
             const d_indeces = s.ast.extra.items[s_def.statements_start..s_def.statements_end];
             return air_gen_struct_def(s, d_indeces);
         },
-        .container_literal => |container| {
-            return air_gen_container_lit(s, container.target_type, s.ast.extra.items[container.assignments_start..container.assignments_end]);
+        .enum_definition_one => |s_def| {
+            // const d_indeces: []const Node.Index = ;
+            return air_gen_enum_def(s, (&s_def.statement)[0..1]);
         },
-        .container_literal_one => |container| {
-            return air_gen_container_lit(s, container.target_type, (&container.assignment)[0..1]);
+        .enum_definition => |s_def| {
+            const d_indeces = s.ast.extra.items[s_def.statements_start..s_def.statements_end];
+            return air_gen_enum_def(s, d_indeces);
+        },
+        .struct_literal => |struct_lit| {
+            return air_gen_struct_lit(s, struct_lit.target_type, s.ast.extra.items[struct_lit.assignments_start..struct_lit.assignments_end]);
+        },
+        .struct_literal_one => |struct_lit| {
+            return air_gen_struct_lit(s, struct_lit.target_type, (&struct_lit.assignment)[0..1]);
         },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
@@ -774,7 +794,7 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
 
     // allocate stack memory for mutable declarations
     const expr_node = s.ast.nodes.items[expr.?];
-    if (mutable and expr_node != .container_literal and expr_node != .container_literal_one) {
+    if (mutable and expr_node != .struct_literal and expr_node != .struct_literal_one and expr_node != .enum_literal) {
         const alloc_inst = try s.append_inst(.{ .alloca = .{ .type = type_inst } });
         _ = try s.append_inst(.{ .store = .{ .ptr = alloc_inst, .val = type_as_inst } });
         try s.push_var(id, mutable, alloc_inst, type_inst);

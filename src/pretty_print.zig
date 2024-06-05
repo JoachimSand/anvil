@@ -242,21 +242,27 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast_slice(a, prefix, fn_call.args);
         },
 
-        .container_literal_empty => |lit| {
-            print("Empty container lit.\n", .{});
+        .struct_literal_empty => |lit| {
+            print("Empty struct lit.\n", .{});
             try print_ast(a, prefix, true, lit.target_type);
         },
 
-        .container_literal_one => |lit| {
-            print("Container lit. single\n", .{});
+        .struct_literal_one => |lit| {
+            print("Struct lit. single\n", .{});
             try print_ast(a, prefix, false, lit.target_type);
             try print_ast(a, prefix, true, lit.assignment);
         },
 
-        .container_literal => |lit| {
-            print("Container lit.\n", .{});
+        .struct_literal => |lit| {
+            print("Struct lit.\n", .{});
             try print_ast(a, prefix, false, lit.target_type);
             try print_ast_slice(a, prefix, .{ .start = lit.assignments_start, .end = lit.assignments_end });
+        },
+        .enum_literal => |lit| {
+            const str = a.get_tok_str(lit.active_identifier);
+            print("Enum lit. with active field {s}\n", .{str});
+            try print_ast(a, prefix, false, lit.enum_target);
+            try print_ast(a, prefix, true, lit.expr);
         },
 
         .field_access => |f| {

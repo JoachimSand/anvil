@@ -25,6 +25,10 @@ const AirInst = air_mod.AirInst;
 // %2 = constant(type, struct {a : u32, b : u32});
 // %3 = constant(struct { a : u32, b : u32}, )
 
+// Enums
+// We know that since an enum is accessed here
+// %1 = get_element_ptr &enum { field_a : u32, field_b : u32}, from .. by 1
+
 // Represents a compile-time known type
 const Type = union(enum) {
     const Index = u32;
@@ -37,11 +41,17 @@ const Type = union(enum) {
         fields_start: Index,
         fields_end: Index,
     };
+    const TirEnum = struct {
+        fields_start: Index,
+        fields_end: Index,
+    };
 
     ptr: Type.IndexRef,
     tir_struct: TirStruct,
     tir_struct_field: Field,
     tir_mut_struct_field: Field,
+    tir_enum: TirEnum,
+    tir_enum_field: Field,
 
     tir_array: struct {
         size: u32,
@@ -278,7 +288,7 @@ fn print_type(t: *TirState, type_ref: Type.IndexRef) !void {
                     try print_type(t, array.element_type);
                 },
                 .tir_struct => |tir_struct| {
-                    print("struct (", .{});
+                    print("struct{{", .{});
 
                     var cur_field_index = tir_struct.fields_start;
                     while (cur_field_index <= tir_struct.fields_end) : (cur_field_index += 1) {
@@ -301,7 +311,7 @@ fn print_type(t: *TirState, type_ref: Type.IndexRef) !void {
                             else => unreachable,
                         }
                     }
-                    print(")", .{});
+                    print("}}", .{});
                 },
                 else => return error.Unimplemented,
             }

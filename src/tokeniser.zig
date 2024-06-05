@@ -48,6 +48,7 @@ pub const TokenType = enum {
     dot2, // ".."
     dot_asterisk, // ".*"
     colon, // ":"
+    colon2, // ":"
     semicolon, // ";"
 
     keyword_fn,
@@ -95,6 +96,7 @@ const TokenState = enum {
     l_arrow2, // "<<"
     r_arrow2, // ">>"
     dot, // "."
+    colon,
 };
 
 inline fn equals_or_single(cur_char: u8, pos: *SourceIndex, equals_tok: TokenType, single_tok: TokenType) TokenType {
@@ -225,6 +227,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                 '<' => state = .l_arrow,
                 '>' => state = .r_arrow,
                 '.' => state = .dot,
+                ':' => state = .colon,
 
                 '(' => {
                     pos += 1;
@@ -253,10 +256,6 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                 ',' => {
                     pos += 1;
                     return TokenFull.init(.comma, start, pos);
-                },
-                ':' => {
-                    pos += 1;
-                    return TokenFull.init(.colon, start, pos);
                 },
                 ';' => {
                     pos += 1;
@@ -485,6 +484,15 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
                     else => return TokenFull.init(.dot, start, pos),
                 }
             },
+            .colon => {
+                switch (cur_char) {
+                    ':' => {
+                        pos += 1;
+                        return TokenFull.init(.colon2, start, pos);
+                    },
+                    else => return TokenFull.init(.colon, start, pos),
+                }
+            },
         }
         pos += 1;
     }
@@ -522,6 +530,7 @@ fn tokenise(src: []const u8, start_from: SourceIndex) !TokenFull {
         .l_arrow2 => return TokenFull.init(.l_arrow2, start, pos),
         .r_arrow2 => return TokenFull.init(.r_arrow2, start, pos),
         .dot => return TokenFull.init(.dot, start, pos),
+        .colon => return TokenFull.init(.colon, start, pos),
     }
 }
 

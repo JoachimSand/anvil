@@ -1,0 +1,7 @@
+
+enum_def := enum {
+	some : struct { a : u8; b : u8; };
+	none : u16;
+};
+
+var := enum_def::none{ u8};
