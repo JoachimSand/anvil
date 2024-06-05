@@ -801,8 +801,8 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                             if (tir_type_ref == .tir_typ) {
                                 print("Made it here3\n", .{});
                                 try t.air_tir_type_map.put(@enumFromInt(air_index), expr_type);
-                                const expr_type_inst = try t.append_inst(.{ .constant_type = expr_type });
-                                try t.air_tir_inst_map.put(@enumFromInt(air_index), expr_type_inst);
+                                // const expr_type_inst = try t.append_inst(.{ .constant_type = expr_type });
+                                // try t.air_tir_inst_map.put(@enumFromInt(air_index), expr_type_inst);
                                 continue;
                             }
                         },
@@ -900,7 +900,6 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
 
                 if (tir_target_inst) |inst| {
                     // We are indexing into a value
-                    // TODO: FIX THIS, TOO EAGER CASE
                     const target_inst = try get_tir_inst_ret_type(t, inst);
                     print("Target inst: {}\n", .{target_inst});
                     const target_type = t.types.get(@intFromEnum(target_inst));
