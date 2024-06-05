@@ -95,6 +95,9 @@ fn test_compiler(file_name: []const u8) !void {
 
     try compile_mod.read_file(&input, file_name);
 
+    print("\n=========== FILE CONTENTS ===========\n", .{});
+    print("{s}", .{input.items});
+    print("\n===========               ===========\n", .{});
     // const node_tag = NodeTag{ .param_list = .{ .hello = 10 } };
     // print("{any}\n", .{node_tag});
 

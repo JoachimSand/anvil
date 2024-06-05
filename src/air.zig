@@ -341,7 +341,7 @@ pub const AirState = struct {
     fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.IndexRef, type_inst: AirInst.IndexRef) AirError!void {
         const str_index = try s.intern_token(var_tok);
 
-        print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
+        // print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
         switch (s.scopes.items[s.scopes.items.len - 1]) {
             .top => |*top| {
                 if (top.get(str_index)) |_| {
@@ -419,7 +419,7 @@ pub const AirState = struct {
     }
 
     fn pop_scratch_to_extra(s: *AirState, count: usize) !AirInst.ExtraSlice {
-        print("\nPopping {} to extra, scratch has length {} \n", .{ count, s.scratch.items.len });
+        // print("\nPopping {} to extra, scratch has length {} \n", .{ count, s.scratch.items.len });
         const elems = s.scratch.items[s.scratch.items.len - count ..];
 
         const start: u32 = @intCast(s.air.extra.items.len);
@@ -578,7 +578,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
 }
 
 fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index) AirError!AirInst.ExtraSlice {
-    print("D INDECES LENGTH {}\n", .{d_indeces.len});
+    // print("D INDECES LENGTH {}\n", .{d_indeces.len});
     // const start_extra: AirState.ExtraIndex = @intCast(s.extra.items.len);
     // var end_extra: AirState.ExtraIndex = undefined;
     var count: Air.ExtraIndex = 0;
@@ -589,7 +589,7 @@ fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index) AirError!
             .mut_var_decl_type, .var_decl_type => |type_decl| {
                 // TODO: PUSH SCOPE TO ALLOW REFERRING TO OTHER IDENTIFIERS IN STRUCT
                 const decl_name = try s.intern_token(type_decl.identifier);
-                print("DECL NAME: {s}\n", .{s.air.get_string(decl_name)});
+                // print("DECL NAME: {s}\n", .{s.air.get_string(decl_name)});
                 const type_inst = try air_gen_expr(s, type_decl.decl_type);
 
                 var field_info: AirInst.DeclInfo = undefined;
@@ -599,14 +599,14 @@ fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index) AirError!
                     field_info = AirInst.DeclInfo{ .var_name = decl_name, .mutable = false, .type_inst = type_inst };
                 }
                 _ = try s.append_scratch_struct(AirInst.DeclInfo, field_info);
-                print("Scratch len: {}\n", .{s.scratch.items.len});
+                // print("Scratch len: {}\n", .{s.scratch.items.len});
                 count += 1;
             },
             // .mut_var_decl_type => return error.Unimplemented,
             else => unreachable,
         }
     }
-    print("Encounterd {} decl in list \n", .{count});
+    // print("Encounterd {} decl in list \n", .{count});
     const field_count: Air.ExtraIndex = @intCast(@typeInfo(AirInst.DeclInfo).Struct.fields.len);
     return s.pop_scratch_to_extra(field_count * count);
 }
@@ -624,7 +624,7 @@ fn air_gen_container_lit(s: *AirState, target_type_index: Node.Index, assignment
     //
     for (assignments) |assign_index| {
         const cur_assign = s.ast.nodes.items[assign_index];
-        print("Curassign {}\n", .{cur_assign});
+        // print("Curassign {}\n", .{cur_assign});
         if (cur_assign != .assignment) {
             return error.Unimplemented;
         }
@@ -635,7 +635,7 @@ fn air_gen_container_lit(s: *AirState, target_type_index: Node.Index, assignment
         }
 
         const field_name = try s.intern_token(target_type.identifier);
-        print("Field name {s}\n", .{s.air.get_string(field_name)});
+        // print("Field name {s}\n", .{s.air.get_string(field_name)});
         const start_and_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
         try s.air.extra.append(field_name);
         const get_element = AirInst.GetElementPtr{ .aggregate_ptr = alloc_inst, .fields = .{ .start = start_and_end, .end = start_and_end } };
@@ -658,8 +658,8 @@ fn air_gen_container_lit(s: *AirState, target_type_index: Node.Index, assignment
 }
 
 fn air_gen_expr(s: *AirState, index: Node.Index) AirError!AirInst.IndexRef {
-    print("AIR Expr gen for the following node: \n", .{});
-    try pretty_print_mod.print_ast_start(s.ast, index);
+    // print("AIR Expr gen for the following node: \n", .{});
+    // try pretty_print_mod.print_ast_start(s.ast, index);
 
     const cur_node = s.ast.nodes.items[index];
     switch (cur_node) {
@@ -815,7 +815,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
     var cur_block_inst = start_block;
     for (s_indeces) |s_index| {
         const statement = s.ast.nodes.items[s_index];
-        print("AIR gen for statement {}\n", .{statement});
+        // print("AIR gen for statement {}\n", .{statement});
         switch (statement) {
             .block => |_| _ = try air_gen_scoped_block(s, s_index, true),
             .block_one => |_| _ = try air_gen_scoped_block(s, s_index, true),
@@ -1003,7 +1003,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
 }
 
 fn air_gen_scoped_block(s: *AirState, n_index: Node.Index, new_scope: bool) !AirInst.IndexRef {
-    print("AIR gen for block {}\n", .{n_index});
+    // print("AIR gen for block {}\n", .{n_index});
     if (new_scope) {
         try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.air.allocator) });
     }
@@ -1056,7 +1056,9 @@ pub fn air_gen(ast: *Ast) !Air {
 
     // const root_node = ast.nodes.items[ast.root].root;
     _ = try air_gen_scoped_block(&s, ast.root, true);
-    try print_air(&s.air, 0, @intCast(s.air.instructions.len), 0);
 
+    print("\n=========== GENERATED AIR ===========\n", .{});
+    try print_air(&s.air, 0, @intCast(s.air.instructions.len), 0);
+    print("\n===========               ===========\n", .{});
     return s.get_air();
 }
