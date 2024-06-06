@@ -1116,12 +1116,17 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
 
                     // Create the block for the case, inserting a project instruction for the active tag
                     const project_inst = try s.append_inst(AirInst{ .enum_project = .{ .enum_ptr = @intFromEnum(enum_ptr), .tag = case_tag } });
+
+                    // Project inst creates a ptr to the tag data type. Load it.
+                    // TODO: Problem with aggregrates.
+                    const load_inst = try s.append_inst(AirInst{ .load = .{ .ptr = project_inst } });
+
                     // TODO: Should this be type of deref?
-                    const type_of_inst = try s.append_inst(AirInst{ .type_of = project_inst });
+                    const type_of_inst = try s.append_inst(AirInst{ .type_of = load_inst });
 
                     switch (capture_node) {
                         .identifier => {
-                            try s.push_var(capture_node.identifier, false, project_inst, type_of_inst);
+                            try s.push_var(capture_node.identifier, false, load_inst, type_of_inst);
                         },
                         else => return error.Unimplemented,
                     }

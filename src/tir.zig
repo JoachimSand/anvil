@@ -167,6 +167,20 @@ const TirInst = union(enum) {
         indeces_start: TirState.ExtraIndex,
         indeces_end: TirState.ExtraIndex,
     },
+    match: struct {
+        enum_ptr: IndexRef,
+        // Cases are in order of their tags i.e. order of appearance in definition
+        // Each case in extra is a blk inst. ref
+        cases_start: TirState.ExtraIndex,
+        cases_end: TirState.ExtraIndex,
+    },
+    // Takes in an enum pointer and a tag. Allocates enough space for data type of the tag,
+    // copies over the data from the enum_ptr and then returns a ptr to the newly allocated data type.
+    enum_project: struct {
+        enum_ptr: Index,
+        enum_type: Type.IndexRef,
+        tag: u32,
+    },
 
     move: Index,
 
@@ -446,6 +460,19 @@ fn print_tir(t: *TirState, start: u32, stop: u32, indent: u32) !void {
                 try print_type(t, update_enum.enum_type);
                 print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_ptr });
             },
+            .match => |match| {
+                print("match on %{} : ", .{match.enum_ptr});
+                var case_index = match.cases_start;
+                while (case_index <= match.cases_end) : (case_index += 1) {
+                    const blk = t.extra.items[case_index];
+                    print("{} -> %{}, ", .{ case_index - match.cases_start, blk });
+                }
+            },
+            .enum_project => |project| {
+                print("enum_project ", .{});
+                try print_type(t, project.enum_type);
+                print(", %{}, tagnum {}", .{ project.enum_ptr, project.tag });
+            },
             .zero_array => |zero_array_type| {
                 print("zero_array of ", .{});
                 try print_type(t, zero_array_type);
@@ -528,6 +555,22 @@ fn get_val_index(t: *TirState, tir_ref: TirInst.IndexRef) !?Value.Index {
     }
 }
 
+fn get_enum_field(t: *TirState, enum_agg: Type.TirAggregrate, field_name: Air.StringIndex) struct { Type.Field, u32 } {
+    var enum_field_index = enum_agg.fields_start;
+    while (enum_field_index <= enum_agg.fields_end) : (enum_field_index += 1) {
+        const cur_field = t.types.get(enum_field_index);
+        switch (cur_field) {
+            .tir_enum_field => |enum_field| {
+                if (enum_field.var_name == field_name) {
+                    return .{ enum_field, enum_field_index - enum_agg.fields_start };
+                }
+            },
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
 fn get_aggregate_type(t: *TirState, type_ref: Type.IndexRef, get_enum: bool) !Type.TirAggregrate {
     switch (type_ref) {
         .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_typ => {
@@ -591,7 +634,16 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
 
             switch (inst) {
                 .lt_i8, .lt_i16, .lt_i32, .lt_i64, .lt_u8, .lt_u16, .lt_u32, .lt_u64 => return .tir_boolean,
-                .block, .br, .br_cond, .br_either => return error.NoType,
+                .block, .br, .br_cond, .br_either, .match => return error.NoType,
+                .enum_project => |project| {
+                    const enum_type = try get_aggregate_type(t, project.enum_type, true);
+
+                    const cur_field_index = enum_type.fields_start + project.tag;
+                    const cur_field = t.types.get(cur_field_index);
+                    const field_type = cur_field.tir_enum_field.field_type;
+                    const type_index = try t.append_type(Type{ .ptr = field_type });
+                    return @enumFromInt(type_index);
+                },
                 .constant_type => |type_ref| return type_ref,
                 .constant_val => |val_index| {
                     return get_val_type(t, val_index);
@@ -633,8 +685,6 @@ fn get_tir_inst_ret_type(t: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
                             },
                             else => unreachable,
                         }
-
-                        // const aggre
                     }
                     unreachable;
                 },
@@ -733,11 +783,11 @@ fn tir_gen_blk(t: *TirState, air_blk_index: AirInst.Index) !TirInst.Index {
     const tir_blk_index = try t.append_inst(undefined);
     var tir_inst = TirInst{ .block = .{ .start = @intCast(t.instructions.len), .end = undefined } };
     try t.air_tir_inst_map.put(@enumFromInt(air_blk_index), tir_blk_index);
-    // print("Block begins at {}\n", .{tir_inst.block.start});
+    print("Block begins at {}\n", .{tir_inst.block.start});
 
     const air_blk = t.air.instructions.get(air_blk_index);
 
-    // print("\nGENERATING BLOCK FROM AIR {d} TO {d}\n", .{ @intFromEnum(air_blk.block.start), @intFromEnum(air_blk.block.end) });
+    print("\nGENERATING BLOCK FROM AIR {d} TO {d}\n", .{ @intFromEnum(air_blk.block.start), @intFromEnum(air_blk.block.end) });
 
     tir_inst.block.end = try tir_gen_bb(t, @intFromEnum(air_blk.block.start) + 1);
 
@@ -752,18 +802,18 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
     const air_instructions = t.air.instructions.slice();
     // print("Generating instructions from {}\n", .{air_bb_start});
     while (air_index < t.air.instructions.len) : (air_index += 1) {
-        print("\nGenerating TIR for AIR instruction {}\n", .{air_index});
+        print("\nGenerating TIR for AIR instruction: ", .{});
         try air_mod.print_air(t.air, air_index, air_index + 1, 0);
-        print("TIR so far:\n", .{});
-        try print_tir(t, 0, @intCast(t.instructions.len), 0);
+        // print("TIR so far:\n", .{});
+        // try print_tir(t, 0, @intCast(t.instructions.len), 0);
 
         const air_inst = air_instructions.get(air_index);
         switch (air_inst) {
             .block => |block| {
                 _ = block;
-                return tir_gen_blk(t, air_index);
+                // return tir_gen_blk(t, air_index);
                 // return @intCast(t.instructions.len - 1);
-                // return error.Unimplemented;
+                return error.Unimplemented;
             },
             .fn_def => |fn_def_extra| {
                 _ = fn_def_extra;
@@ -815,6 +865,7 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 const tir_enum_type = t.types.get(@intFromEnum(tir_enum_ptr_type)).ptr;
                 const tir_enum = try get_aggregate_type(t, tir_enum_type, true);
 
+                // TODO: Use get_enum_field
                 var tag: u32 = undefined;
                 var tag_field_type: Type.IndexRef = undefined;
                 var enum_field_index = tir_enum.fields_start;
@@ -930,6 +981,50 @@ fn tir_gen_bb(t: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 const tir_get_elem = TirInst{ .get_element_ptr = .{ .aggregate_ptr = tir_aggregate_inst, .aggregate_type = tir_aggregate_type, .indeces_start = access_field_indeces_start, .indeces_end = access_field_indeces_end } };
                 const tir_get_elem_inst = try t.append_inst(tir_get_elem);
                 try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_get_elem_inst);
+            },
+            .match => |air_match| {
+                const tir_enum_ptr_inst = try t.get_inst_mapping(@enumFromInt(air_match.enum_ptr));
+                const tir_enum_ptr_type = try get_tir_inst_ret_type(t, tir_enum_ptr_inst);
+
+                const tir_enum_type = t.types.get(@intFromEnum(tir_enum_ptr_type)).ptr;
+                const tir_enum = try get_aggregate_type(t, tir_enum_type, true);
+                const num_cases: u32 = @intCast(tir_enum.fields_end - tir_enum.fields_start);
+
+                const cases_field_count: Air.ExtraIndex = @intCast(@typeInfo(AirInst.MatchCase).Struct.fields.len);
+
+                const tir_match_inst_index = try t.append_inst(undefined);
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_match_inst_index);
+
+                const cases_start: u32 = @intCast(t.extra.items.len);
+                try t.extra.resize(t.extra.items.len + num_cases + 1);
+                var case_index = air_match.cases_start;
+                while (case_index < air_match.cases_end) : (case_index += cases_field_count) {
+                    const case = t.air.get_extra_struct(AirInst.MatchCase, case_index);
+                    print("tag case begin\n", .{});
+                    const case_blk = try tir_gen_blk(t, case.blk);
+
+                    const enum_field_tuple = get_enum_field(t, tir_enum, case.tag);
+                    // const enum_field = enum_field_tuple[0];
+                    const tag_num = enum_field_tuple[1];
+
+                    print("tag case end {}\n", .{tag_num});
+                    t.extra.items[cases_start + tag_num] = case_blk;
+                }
+                const tir_match = TirInst{ .match = .{ .enum_ptr = tir_enum_ptr_inst, .cases_start = cases_start, .cases_end = cases_start + num_cases } };
+                t.instructions.set(@intFromEnum(tir_match_inst_index), tir_match);
+                return @intFromEnum(tir_match_inst_index);
+            },
+            .enum_project => |air_project| {
+                const tir_enum_ptr_inst = try t.get_inst_mapping(@enumFromInt(air_project.enum_ptr));
+                const tir_enum_ptr_type = try get_tir_inst_ret_type(t, tir_enum_ptr_inst);
+
+                const tir_enum_type = t.types.get(@intFromEnum(tir_enum_ptr_type)).ptr;
+                const tir_enum = try get_aggregate_type(t, tir_enum_type, true);
+                const enum_field_tuple = get_enum_field(t, tir_enum, air_project.tag);
+
+                const tir_project = TirInst{ .enum_project = .{ .enum_ptr = @intFromEnum(tir_enum_ptr_inst), .enum_type = tir_enum_type, .tag = enum_field_tuple[1] } };
+                const tir_project_inst = try t.append_inst(tir_project);
+                try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_project_inst);
             },
             .br => |br| {
                 const air_dst: AirInst.Index = @intFromEnum(br);
@@ -1429,8 +1524,8 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !void {
     const topmost_air = tir.air.instructions.get(0);
     std.debug.assert(topmost_air == .block);
 
-    // _ = try tir_gen_blk(&tir, 0);
-    _ = try tir_gen_bb(&tir, 0);
+    _ = try tir_gen_blk(&tir, 0);
+    // _ = try tir_gen_bb(&tir, 0);
     print("\n=========== GENERATED TIR ===========\n", .{});
     try print_tir(&tir, 0, @intCast(tir.instructions.len - 1), 0);
     print("\n===========               ===========\n", .{});
