@@ -1,0 +1,19 @@
+
+
+Person := enum {
+	Hobbit : u32;
+	Wizard : i64;
+};
+
+person := Person::Hobbit{ 111 };
+
+match person {
+	Hobbit |frodo| -> {
+		mut res := frodo;
+	}
+	Wizard |gandalf| -> {
+		mut res := gandalf;
+	}
+}
+
+b := 3;

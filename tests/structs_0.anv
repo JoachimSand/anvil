@@ -3,3 +3,8 @@ Node := struct {
 };
 
 mut test := Node.{d = 1;};
+test.d += 1;
+
+
+mut b : i8 = 2;
+b += 3;

@@ -1,7 +1,12 @@
+DualNode := struct { a : u8; b : u8; };
+
 
 enum_def := enum {
-	some : struct { a : u8; b : u8; };
+	some : DualNode;
 	none : u16;
 };
 
-var := enum_def::none{ u8};
+mut b : u16 = 2;
+
+mut var := enum_def::some{ DualNode.{a = 2; b = 3;}};
+var = enum_def::none{ b};

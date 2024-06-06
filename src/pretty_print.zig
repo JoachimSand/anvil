@@ -119,6 +119,16 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast(a, prefix, true, assignment.expr);
         },
 
+        .match_statement => |statement| {
+            print("match \n", .{});
+            try print_ast(a, prefix, false, statement.expr);
+            try print_ast_slice(a, prefix, .{ .start = statement.cases_start, .end = statement.cases_end });
+        },
+        .match_case => |case| {
+            print("match case {s}\n", .{a.get_tok_str(case.tag_id)});
+            try print_ast(a, prefix, false, case.capture_ref);
+            try print_ast(a, prefix, true, case.block);
+        },
         .while_statement => |statement| {
             print("while\n", .{});
             try print_ast(a, prefix, false, statement.condition);
@@ -162,11 +172,6 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             print("Empty block\n", .{});
         },
 
-        .block_one => |block| {
-            print("Block one\n", .{});
-            try print_ast(a, prefix, true, block.statement);
-        },
-
         .block => |block| {
             print("Block\n", .{});
             try print_ast_slice(a, prefix, .{ .start = block.statements_start, .end = block.statements_end });
@@ -176,11 +181,6 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             print("Empty struct def.\n", .{});
         },
 
-        .struct_definition_one => |block| {
-            print("Struct def. one\n", .{});
-            try print_ast(a, prefix, true, block.statement);
-        },
-
         .struct_definition => |block| {
             print("Struct def.\n", .{});
             try print_ast_slice(a, prefix, .{ .start = block.statements_start, .end = block.statements_end });
@@ -188,11 +188,6 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
 
         .enum_definition_empty => {
             print("Empty struct def.\n", .{});
-        },
-
-        .enum_definition_one => |block| {
-            print("Enum def. one\n", .{});
-            try print_ast(a, prefix, true, block.statement);
         },
 
         .enum_definition => |block| {
@@ -245,12 +240,6 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
         .struct_literal_empty => |lit| {
             print("Empty struct lit.\n", .{});
             try print_ast(a, prefix, true, lit.target_type);
-        },
-
-        .struct_literal_one => |lit| {
-            print("Struct lit. single\n", .{});
-            try print_ast(a, prefix, false, lit.target_type);
-            try print_ast(a, prefix, true, lit.assignment);
         },
 
         .struct_literal => |lit| {

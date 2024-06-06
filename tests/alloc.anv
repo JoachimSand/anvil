@@ -1,0 +1,6 @@
+BinNode := struct {
+	a : u32;
+	b : &BinNode;
+};
+
+

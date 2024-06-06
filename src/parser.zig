@@ -69,17 +69,23 @@ pub const Node = union(enum) {
         condition: Index,
         block: Index,
     },
+    match_statement: struct {
+        expr: Index,
+        cases_start: ExtraIndex,
+        cases_end: ExtraIndex,
+    },
+    match_case: struct {
+        tag_id: Token.Index,
+        capture_ref: Index,
+        block: Index,
+    },
 
     assignment: Assignment,
 
     block: struct {
         start_brace: Token.Index,
-        statements_start: Index,
-        statements_end: Index,
-    },
-    block_one: struct {
-        start_brace: Token.Index,
-        statement: Index,
+        statements_start: ExtraIndex,
+        statements_end: ExtraIndex,
     },
     block_empty: struct {
         start_brace: Token.Index,
@@ -92,10 +98,6 @@ pub const Node = union(enum) {
         statements_start: Index,
         statements_end: Index,
     },
-    struct_definition_one: struct {
-        struct_keyword: Token.Index,
-        statement: Index,
-    },
     struct_definition_empty: struct {
         struct_keyword: Token.Index,
     },
@@ -104,10 +106,6 @@ pub const Node = union(enum) {
         enum_keyword: Token.Index,
         statements_start: Index,
         statements_end: Index,
-    },
-    enum_definition_one: struct {
-        enum_keyword: Token.Index,
-        statement: Index,
     },
     enum_definition_empty: struct {
         enum_keyword: Token.Index,
@@ -122,10 +120,6 @@ pub const Node = union(enum) {
         target_type: Index,
         assignments_start: ExtraIndex,
         assignments_end: ExtraIndex,
-    },
-    struct_literal_one: struct {
-        target_type: Index,
-        assignment: Index,
     },
     struct_literal_empty: struct {
         target_type: Index,
@@ -602,19 +596,12 @@ fn parse_identifier(p: *Parser) ParseError!Node.Index {
 fn create_statements_node(p: *Parser, comptime node_name: []const u8, statements: ?[]Node.Index, comptime tok_field: []const u8, tok: Token.Index) ParseError!Node.Index {
     var node: Node = undefined;
     if (statements) |*s| {
-        if (s.len == 1) {
-            node = @unionInit(Node, node_name ++ "_one", undefined);
-            @field(node, node_name ++ "_one").statement = s.*[0];
-            @field(@field(node, node_name ++ "_one"), tok_field) = tok;
-            p.scratch.items.len -= s.len;
-        } else {
-            const slice = try p.pop_scratch_to_extra(s.len);
-            node = @unionInit(Node, node_name, undefined);
-            @field(node, node_name).statements_start = slice.start;
-            @field(node, node_name).statements_end = slice.end;
-            @field(@field(node, node_name), tok_field) = tok;
-            // node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
-        }
+        const slice = try p.pop_scratch_to_extra(s.len);
+        node = @unionInit(Node, node_name, undefined);
+        @field(node, node_name).statements_start = slice.start;
+        @field(node, node_name).statements_end = slice.end;
+        @field(@field(node, node_name), tok_field) = tok;
+        // node = Node{ .block = .{ .start_brace = l_brace.index, .statements_start = slice.start, .statements_end = slice.end } };
         // print("\nPopping {} statements, scratch has length {} \n", .{ s.len, p.scratch.items.len });
     } else {
         @field(@field(node, node_name ++ "_empty"), tok_field) = tok;
@@ -632,6 +619,30 @@ fn parse_block(p: *Parser) ParseError!Node.Index {
     _ = try p.expect_token(.r_brace);
     // print("Finished parsing block\n", .{});
     return block_node;
+}
+
+// Capture <- "|" ReferenceOp? Identifier "|"
+fn parse_capture(p: *Parser) ParseError!Node.Index {
+    _ = try p.expect_token(.pipe);
+    const peek = try p.peek_token();
+    var capture: Node.Index = undefined;
+    if (peek.type == .ampersand or peek.type == .ampersand2) {
+        capture = try parse_reference(p, parse_identifier);
+    } else {
+        capture = try parse_identifier(p);
+    }
+    _ = try p.expect_token(.pipe);
+    return capture;
+}
+
+// MatchCase <- Identifier Capture "->" Block
+// MatchStatement <- "match" Expr "{" MatchCase+ "}"
+fn parse_match_case(p: *Parser) ParseError!Node.Index {
+    const id_tok = try p.expect_token(.identifier);
+    const capture_ref = try parse_capture(p);
+    _ = try p.expect_token(.minus_arrow);
+    const block = try parse_block(p);
+    return p.append_node(Node{ .match_case = .{ .tag_id = id_tok.index, .capture_ref = capture_ref, .block = block } });
 }
 
 // Will keep parsing statements until r_brace or EOF is encountered;
@@ -675,19 +686,11 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                 const cond_expr = try parse_expr(p, 0);
 
                 // Possible capture
-                var peek = try p.peek_token();
+                const peek = try p.peek_token();
 
-                // Capture <- "|" ReferenceOp? Identifier "|"
                 var capture: ?Node.Index = null;
                 if (peek.type == .pipe) {
-                    _ = p.next_token() catch undefined;
-                    peek = try p.peek_token();
-                    if (peek.type == .ampersand or peek.type == .ampersand2) {
-                        capture = try parse_reference(p, parse_identifier);
-                    } else {
-                        capture = try parse_identifier(p);
-                    }
-                    _ = try p.expect_token(.pipe);
+                    capture = try parse_capture(p);
                 }
 
                 const while_block = try parse_block(p);
@@ -718,15 +721,7 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                     // Capture <- "|" ReferenceOp? Identifier "|"
                     var capture: ?Node.Index = null;
                     if (peek.type == .pipe) {
-                        _ = p.next_token() catch undefined;
-                        peek = try p.peek_token();
-                        if (peek.type == .ampersand or peek.type == .ampersand2) {
-                            capture = try parse_reference(p, parse_identifier);
-                        } else {
-                            capture = try parse_identifier(p);
-                        }
-
-                        _ = try p.expect_token(.pipe);
+                        capture = try parse_capture(p);
                     }
 
                     const block = try parse_block(p);
@@ -799,6 +794,27 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                 } else {
                     unreachable;
                 }
+            },
+
+            .keyword_match => {
+                const match_tok = p.next_token() catch undefined;
+                _ = match_tok;
+                const expr = try parse_expr(p, 0);
+                _ = try p.expect_token(.l_brace);
+
+                var peek = try p.peek_token();
+                var match_case_count: usize = 0;
+                while (peek.type != .r_brace) {
+                    const match_case = try parse_match_case(p);
+                    try p.scratch.append(match_case);
+                    match_case_count += 1;
+                    peek = try p.peek_token();
+                }
+                _ = try p.expect_token(.r_brace);
+                const match_case_slice = try p.pop_scratch_to_extra(match_case_count);
+                const match_node = Node{ .match_statement = .{ .expr = expr, .cases_start = match_case_slice.start, .cases_end = match_case_slice.end } };
+                const match_index = try p.append_node(match_node);
+                try p.scratch.append(match_index);
             },
 
             else => return error.Unimplemented,
@@ -1059,13 +1075,8 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
 
                     var struct_node: Node = undefined;
                     if (assignments) |a| {
-                        if (a.len == 1) {
-                            const slice = try p.pop_scratch_to_extra(a.len);
-                            struct_node = Node{ .struct_literal_one = .{ .target_type = primary, .assignment = p.extra.items[slice.start] } };
-                        } else {
-                            const slice = try p.pop_scratch_to_extra(a.len);
-                            struct_node = Node{ .struct_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
-                        }
+                        const slice = try p.pop_scratch_to_extra(a.len);
+                        struct_node = Node{ .struct_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
                     } else {
                         struct_node = Node{ .struct_literal_empty = .{ .target_type = primary } };
                     }

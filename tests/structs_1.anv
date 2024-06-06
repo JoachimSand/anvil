@@ -5,6 +5,4 @@ BinNode := struct {
 };
 
 mut node := BinNode.{a = 93; b = 94; };
-
-node.a = 95;
-node.b = 3;
+node = BinNode.{a = 95; b = 96};
