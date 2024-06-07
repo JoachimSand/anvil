@@ -1,10 +1,10 @@
 BinNode := struct { d : u32;};
 
-fn add(a : BinNode, b : BinNode) -> u32 {
-	c := a + b;
+fn fn_with_struct(a : BinNode, b : BinNode) -> u32 {
+	c := 3;
 }
 
 
-fn add_inline(a : BinNode, b : struct { e : u32;}) -> u32 {
-	c := a + b;
+fn fn_with_inline_struct(a : BinNode, b : struct { e : u32;}) -> u32 {
+	c := 4;
 }

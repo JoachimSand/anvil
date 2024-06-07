@@ -1,12 +1,16 @@
+Node := struct {
+	c : u32;
+	d : u32;
+};
+
 BinNode := struct {
-	a : i32;
+	a : & Node;
 	b : i32;
 };
 
 fn test(input : BinNode) -> i8 {
-	recv := input;
+	mut node := move @alloc(Node.{c = 1; d = 2;});
 
-	mut left : &.own BinNode = @alloc(BinNode.{ a = 2; b = 3;});
-	second := move left;
-	res := @free(second);
+	mut node1 : &.own Node = move node;
+	mut node2 : &Node = node;
 }

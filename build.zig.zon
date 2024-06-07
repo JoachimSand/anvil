@@ -1,0 +1,16 @@
+.{
+    .name = "anvil",
+    .version = "0.1.0",
+    .dependencies = .{
+        .ziglangSet = .{
+            .url = "https://github.com/deckarep/ziglang-set/archive/c489ab4e28afd477d928fc242963ffc103521c4a.tar.gz",
+            .hash = "12204f733d2801b2857d0d7a11237eed4312885bcc94c3e059654d3e1600339428a1",
+        },
+    },
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+        "README.md",
+    },
+}
