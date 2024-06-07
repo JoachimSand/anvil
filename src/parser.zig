@@ -170,6 +170,7 @@ pub const Node = union(enum) {
     // },
     identifier: Token.Index,
     built_in_alloc: Token.Index,
+    built_in_free: Token.Index,
     integer_lit: Token.Index,
 
     pub const Index = u32;
@@ -957,6 +958,7 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         .integer_bin, .integer_oct, .integer_hex, .integer_dec => primary = try p.append_node(.{ .integer_lit = tok.index }),
         .identifier => primary = try p.append_node(Node{ .identifier = tok.index }),
         .built_in_alloc => primary = try p.append_node(Node{ .built_in_alloc = tok.index }),
+        .built_in_free => primary = try p.append_node(Node{ .built_in_free = tok.index }),
 
         .dot => return error.Unimplemented,
 

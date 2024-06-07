@@ -94,6 +94,7 @@ pub const AirInst = union(enum) {
         u16,
         u32,
         u64,
+        void,
         own,
         ref,
         type,
@@ -131,7 +132,7 @@ pub const AirInst = union(enum) {
         name: Air.StringIndex,
         params: ExtraSlice,
         ret_type: IndexRef,
-        blk: IndexRef,
+        blk: Index,
     };
     fn_def: Air.ExtraIndex,
     struct_def: ContainerDef,
@@ -197,6 +198,9 @@ pub const AirInst = union(enum) {
     memalloc: struct {
         expr: IndexRef,
     },
+    memfree: struct {
+        expr: IndexRef,
+    },
 
     // Like alloca but for arrays
     zero_array: IndexRef,
@@ -237,6 +241,7 @@ const PrimitiveIdMap = std.ComptimeStringMap(AirInst.IndexRef, .{
     .{ "u16", AirInst.IndexRef.u16 },
     .{ "u32", AirInst.IndexRef.u32 },
     .{ "u64", AirInst.IndexRef.u64 },
+    .{ "void", AirInst.IndexRef.void },
     .{ "own", AirInst.IndexRef.own },
     .{ "ref", AirInst.IndexRef.ref },
     .{ "type", AirInst.IndexRef.type },
@@ -261,7 +266,7 @@ const Scope = union(enum) {
     // func_params: struct { params: IdentifierMap, block: IdentifierMap },
 };
 
-const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar, AllocExpectsOneArg };
+const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar, AllocExpectsOneArg, FreeExpectsOneArg };
 
 pub const AirError = AirSpecificError || Allocator.Error || std.fmt.ParseIntError;
 
@@ -602,6 +607,9 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .memalloc => |memalloc| {
                 print("memalloc %{} ", .{memalloc.expr});
             },
+            .memfree => |memfree| {
+                print("memfree %{} ", .{memfree.expr});
+            },
             .get_element_ptr => |extra_index| {
                 const get_element_ptr = a.get_extra_struct(AirInst.GetElementPtr, extra_index);
 
@@ -651,7 +659,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 //     const var_name = a.get_string(arg.name);
                 //     print("{s} : %{}, ", .{ var_name, arg.type });
                 // }
-                print("-> {} at blk %{d}", .{ fn_def.ret_type, @intFromEnum(fn_def.blk) });
+                print("-> {} at blk %{d}", .{ fn_def.ret_type, fn_def.blk });
             },
             else => {
                 print("AIR print unimplemented for {}", .{inst});
@@ -789,16 +797,27 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
 
             const fn_target_node = s.ast.nodes.items[fn_call.target];
-            if (fn_target_node == .built_in_alloc) {
-                const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
-                if (params.len != 1) {
-                    return error.AllocExpectsOneArg;
-                }
-                const param_expr = try air_gen_expr(s, params[0], null, null);
-                return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
-            } else {
-                return error.Unimplemented;
+            switch (fn_target_node) {
+                .built_in_alloc => {
+                    const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+                    if (params.len != 1) {
+                        return error.AllocExpectsOneArg;
+                    }
+                    const param_expr = try air_gen_expr(s, params[0], null, null);
+                    return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
+                },
+                .built_in_free => {
+                    const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+                    if (params.len != 1) {
+                        return error.FreeExpectsOneArg;
+                    }
+                    const param_expr = try air_gen_expr(s, params[0], null, null);
+                    return s.append_inst(AirInst{ .memfree = .{ .expr = param_expr } });
+                },
+                else => return error.Unimplemented,
             }
+
+            if (fn_target_node == .built_in_alloc) {} else if (fn_target_node == .built_in_free) {}
         },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
@@ -966,6 +985,54 @@ fn end_block(s: *AirState, block: AirInst.Index) void {
 //     var target_type_inst: AirInst.IndexRef = undefined;
 // }
 
+fn air_gen_function(s: *AirState, fn_name_id: Token.Index, params: ?[]const Node.Index, ret_type: Node.Index, blk: Node.Index) AirError!void {
+    const fn_name = try s.intern_token(fn_name_id);
+    const reserved_air_index = try s.append_inst(undefined);
+
+    try s.push_scope();
+    const blk_inst = try start_new_block(s);
+
+    var count: Air.ExtraIndex = 0;
+    if (params) |param_indeces| {
+        for (param_indeces) |param_index| {
+            const decl = s.ast.nodes.items[param_index];
+            switch (decl) {
+                .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
+                .var_decl_type => |type_decl| {
+                    const decl_name = try s.intern_token(type_decl.identifier);
+                    const type_inst = try air_gen_expr(s, type_decl.decl_type, null, null);
+
+                    const arg_inst = AirInst{ .arg = .{ .name = decl_name, .type = type_inst } };
+                    const arg_inst_index = try s.append_inst(arg_inst);
+
+                    try s.push_var(type_decl.identifier, false, arg_inst_index, type_inst);
+
+                    // Push the insts of each arg to scratch so that we can later pop them into extra
+                    // as a list than the fn def can reference.
+                    _ = try s.scratch.append(@intFromEnum(arg_inst_index));
+                    count += 1;
+                },
+                .mut_var_decl_type => return error.Unimplemented,
+                else => unreachable,
+            }
+        }
+    }
+    const param_slice = try s.pop_scratch_to_extra(count);
+    // const param_slice = try air_gen_decl_info_list(s, param_indeces, true);
+
+    const air_ret_type = try air_gen_expr(s, ret_type, null, null);
+
+    // Generate statements withins block
+    const fn_s_indeces = try get_block_statements(s, blk);
+    _ = try air_gen_statements(s, fn_s_indeces, blk_inst);
+    s.pop_scope();
+    end_block(s, blk_inst);
+
+    const fn_def = AirInst.FnDef{ .name = fn_name, .params = param_slice, .ret_type = air_ret_type, .blk = blk_inst };
+    const inst = AirInst{ .fn_def = try s.air.append_extra_struct(AirInst.FnDef, fn_def) };
+    s.air.instructions.set(@intFromEnum(reserved_air_index), inst);
+}
+
 fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: AirInst.Index) AirError!void {
     var cur_block_inst = start_block;
     for (s_indeces) |s_index| {
@@ -987,47 +1054,12 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
             //     const fn_name = try s.intern_token(fn_decl.identifier);
             //     const
             // },
+            .fn_decl => |fn_decl| {
+                try air_gen_function(s, fn_decl.identifier, null, fn_decl.ret_type, fn_decl.block);
+            },
             .fn_decl_params => |fn_extra| {
                 const fn_decl = s.ast.get_extra_struct(Node.FnDeclParams, fn_extra);
-                const fn_name = try s.intern_token(fn_decl.identifier);
-                const reserved_air_index = try s.append_inst(undefined);
-                try s.scopes.append(Scope{ .top = Scope.IdentifierMap.init(s.air.allocator) });
-
-                const param_indeces = s.ast.extra.items[fn_decl.params.start..fn_decl.params.end];
-
-                var count: Air.ExtraIndex = 0;
-                for (param_indeces) |param_index| {
-                    const decl = s.ast.nodes.items[param_index];
-                    switch (decl) {
-                        .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
-                        .var_decl_type => |type_decl| {
-                            const decl_name = try s.intern_token(type_decl.identifier);
-                            const type_inst = try air_gen_expr(s, type_decl.decl_type, null, null);
-
-                            const arg_inst = AirInst{ .arg = .{ .name = decl_name, .type = type_inst } };
-                            const arg_inst_index = try s.append_inst(arg_inst);
-
-                            try s.push_var(type_decl.identifier, false, arg_inst_index, type_inst);
-
-                            // Push the insts of each arg to scratch so that we can later pop them into extra
-                            // as a list than the fn def can reference.
-                            _ = try s.scratch.append(@intFromEnum(arg_inst_index));
-                            count += 1;
-                        },
-                        .mut_var_decl_type => return error.Unimplemented,
-                        else => unreachable,
-                    }
-                }
-                const param_slice = try s.pop_scratch_to_extra(count);
-                // const param_slice = try air_gen_decl_info_list(s, param_indeces, true);
-
-                const ret_type = try air_gen_expr(s, fn_decl.ret_type, null, null);
-
-                const blk = try air_gen_scoped_block(s, fn_decl.block, false);
-
-                const fn_def = AirInst.FnDef{ .name = fn_name, .params = param_slice, .ret_type = ret_type, .blk = blk };
-                const inst = AirInst{ .fn_def = try s.air.append_extra_struct(AirInst.FnDef, fn_def) };
-                s.air.instructions.set(@intFromEnum(reserved_air_index), inst);
+                try air_gen_function(s, fn_decl.identifier, s.ast.extra.items[fn_decl.params.start..fn_decl.params.end], fn_decl.ret_type, fn_decl.block);
             },
 
             .assignment => |assign| {
@@ -1159,7 +1191,6 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                     const case_tag = try s.intern_token(case.tag_id);
 
                     try s.push_scope();
-                    const case_s_indeces = try get_block_statements(s, case.block);
 
                     const blk_inst = try start_new_block(s);
                     const capture_node = s.ast.nodes.items[case.capture_ref];
@@ -1180,6 +1211,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                         },
                         else => return error.Unimplemented,
                     }
+                    const case_s_indeces = try get_block_statements(s, case.block);
                     _ = try air_gen_statements(s, case_s_indeces, blk_inst);
 
                     _ = try s.append_inst(undefined);

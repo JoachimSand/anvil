@@ -3,4 +3,10 @@ BinNode := struct {
 	b : i32;
 };
 
-mut left : &.own BinNode = @alloc(BinNode.{ a = 2; b = 3;});
+fn test(input : BinNode) -> i8 {
+	recv := input;
+
+	mut left : &.own BinNode = @alloc(BinNode.{ a = 2; b = 3;});
+	second := move left;
+	res := @free(second);
+}

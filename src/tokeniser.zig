@@ -64,6 +64,7 @@ pub const TokenType = enum {
     keyword_move,
 
     built_in_alloc,
+    built_in_free,
 };
 
 // Approx. subset of token types. Enumerates the possible characters the tokeniser
@@ -142,6 +143,7 @@ const KeywordMap = std.ComptimeStringMap(TokenType, .{
     .{ "and", .keyword_and },
     .{ "move", .keyword_move },
     .{ "@alloc", .built_in_alloc },
+    .{ "@free", .built_in_free },
 });
 
 pub const Tokeniser = struct {
