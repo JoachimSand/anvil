@@ -149,17 +149,12 @@ pub const Node = union(enum) {
     ref_cap: struct {
         ref_tok: Token.Index,
         // May be mut or identifier
-        cap_tok: Token.Index,
+        cap_expr: Index,
         target: Index,
     },
 
     fn_call_empty: struct {
         target: Index,
-        start_paren: Token.Index,
-    },
-    fn_call_single: struct {
-        target: Index,
-        arg: Index,
         start_paren: Token.Index,
     },
     fn_call_full: ExtraIndex,
@@ -863,7 +858,7 @@ fn parse_assigment_w_target(p: *Parser, target: Node.Index, consume_semi: bool) 
 
 const GenericParseFn = *const fn (p: *Parser) ParseError!Node.Index;
 
-// ReferenceOp <- "&"  ("." (Identifier / "mut"))?
+// ReferenceOp <- "&"  ("." (Expr / "mut"))?
 inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) ParseError!Node.Index {
     const ampersand = try p.next_token();
     if (ampersand.type != .ampersand and ampersand.type != .ampersand2) {
@@ -874,8 +869,8 @@ inline fn parse_reference(p: *Parser, comptime parse_after: GenericParseFn) Pars
     var prefix_node: Node = undefined;
     if (maybe_dot.type == .dot) {
         _ = try p.next_token();
-        const id_tok = try p.next_token();
-        prefix_node = Node{ .ref_cap = .{ .ref_tok = ampersand.index, .cap_tok = id_tok.index, .target = try parse_after(p) } };
+        const cap_expr = try parse_postfix_expr(p);
+        prefix_node = Node{ .ref_cap = .{ .ref_tok = ampersand.index, .cap_expr = cap_expr, .target = try parse_after(p) } };
     } else {
         prefix_node = Node{ .ref = .{ .ref_tok = ampersand.index, .target = try parse_after(p) } };
     }
@@ -1027,11 +1022,6 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                 switch (expr_count) {
                     0 => {
                         fn_node = Node{ .fn_call_empty = .{ .target = primary, .start_paren = start_paren.index } };
-                    },
-
-                    1 => {
-                        const arg = p.scratch.pop();
-                        fn_node = Node{ .fn_call_single = .{ .target = primary, .start_paren = start_paren.index, .arg = arg } };
                     },
 
                     else => {

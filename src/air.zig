@@ -94,6 +94,8 @@ pub const AirInst = union(enum) {
         u16,
         u32,
         u64,
+        own,
+        ref,
         type,
         address_of_self,
         _,
@@ -192,6 +194,9 @@ pub const AirInst = union(enum) {
     alloca: struct {
         type: IndexRef,
     },
+    memalloc: struct {
+        expr: IndexRef,
+    },
 
     // Like alloca but for arrays
     zero_array: IndexRef,
@@ -207,7 +212,10 @@ pub const AirInst = union(enum) {
         ptr: IndexRef,
     },
     move: IndexRef,
-    address_of: IndexRef,
+    address_of: struct {
+        target: IndexRef,
+        cap: IndexRef,
+    },
     indexing: struct {
         target: IndexRef,
         index: IndexRef,
@@ -229,6 +237,8 @@ const PrimitiveIdMap = std.ComptimeStringMap(AirInst.IndexRef, .{
     .{ "u16", AirInst.IndexRef.u16 },
     .{ "u32", AirInst.IndexRef.u32 },
     .{ "u64", AirInst.IndexRef.u64 },
+    .{ "own", AirInst.IndexRef.own },
+    .{ "ref", AirInst.IndexRef.ref },
     .{ "type", AirInst.IndexRef.type },
     // .{ "enum", .keyword_enum },
     // .{ "if", .keyword_if },
@@ -251,7 +261,7 @@ const Scope = union(enum) {
     // func_params: struct { params: IdentifierMap, block: IdentifierMap },
 };
 
-const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar };
+const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar, AllocExpectsOneArg };
 
 pub const AirError = AirSpecificError || Allocator.Error || std.fmt.ParseIntError;
 
@@ -589,6 +599,9 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .alloca => |alloc| {
                 print("alloca {} ", .{alloc.type});
             },
+            .memalloc => |memalloc| {
+                print("memalloc %{} ", .{memalloc.expr});
+            },
             .get_element_ptr => |extra_index| {
                 const get_element_ptr = a.get_extra_struct(AirInst.GetElementPtr, extra_index);
 
@@ -772,6 +785,21 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             _ = try s.append_inst(update_enum);
             return enum_alloc;
         },
+        .fn_call_full => |fn_call_extra| {
+            const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
+
+            const fn_target_node = s.ast.nodes.items[fn_call.target];
+            if (fn_target_node == .built_in_alloc) {
+                const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+                if (params.len != 1) {
+                    return error.AllocExpectsOneArg;
+                }
+                const param_expr = try air_gen_expr(s, params[0], null, null);
+                return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
+            } else {
+                return error.Unimplemented;
+            }
+        },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
             const lhs_index = try air_gen_expr(s, bin_exp.lhs, null, null);
@@ -800,10 +828,32 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
                     return .address_of_self;
                 }
             }
-            print("Going to id anyway\n", .{});
             const ref_target = try air_gen_expr(s, ref.target, null, dest_id);
-            return s.append_inst(.{ .address_of = ref_target });
+            return s.append_inst(.{ .address_of = .{ .target = ref_target, .cap = .ref } });
         },
+        .ref_cap => |ref| {
+            const target_node = s.ast.nodes.items[ref.target];
+            print("{} {?}\n", .{ target_node, dest_id });
+            if (dest_id) |id| {
+                if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
+                    return .address_of_self;
+                }
+            }
+            const ref_target = try air_gen_expr(s, ref.target, null, dest_id);
+            const ref_cap = try air_gen_expr(s, ref.cap_expr, null, dest_id);
+            return s.append_inst(.{ .address_of = .{ .target = ref_target, .cap = ref_cap } });
+        },
+        // .ref_cap => |ref_cap| {
+        //     const target_node = s.ast.nodes.items[ref_cap.target];
+        //     print("{} {?}\n", .{ target_node, dest_id });
+        //     if (dest_id) |id| {
+        //         if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
+        //             return .address_of_self;
+        //         }
+        //     }
+        //     const ref_target = try air_gen_expr(s, ref.target, null, dest_id);
+        //     return s.append_inst(.{ .address_of = ref_target });
+        // },
         .indexing => |indexing| {
             const index_expr = try air_gen_expr(s, indexing.index, null, dest_id);
             const target = try air_gen_expr(s, indexing.target, null, dest_id);

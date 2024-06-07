@@ -1,0 +1,6 @@
+BinNode := struct {
+	a : i32;
+	b : i32;
+};
+
+mut left : &.own BinNode = @alloc(BinNode.{ a = 2; b = 3;});

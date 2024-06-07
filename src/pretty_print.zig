@@ -212,8 +212,9 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast(a, prefix, true, ref.target);
         },
         .ref_cap => |ref| {
-            const cap_str = a.get_tok_str(ref.cap_tok);
-            print("&.{s}\n", .{cap_str});
+            // const cap_str = a.get_tok_str(ref.cap_tok);
+            print("&.\n", .{});
+            try print_ast(a, prefix, false, ref.cap_expr);
             try print_ast(a, prefix, true, ref.target);
         },
 
@@ -226,11 +227,6 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
         .fn_call_empty => {
             print("Empty Fn call. \n", .{});
         },
-        .fn_call_single => |fn_call| {
-            print("Fn call single \n", .{});
-            try print_ast(a, prefix, true, fn_call.target);
-        },
-
         .fn_call_full => |extra| {
             print("Fn call \n", .{});
             const fn_call = a.get_extra_struct(Node.FnCallFull, extra);
