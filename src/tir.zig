@@ -627,7 +627,7 @@ pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
             .store => |store| {
                 print("store ", .{});
                 try print_type(s, store.val_type);
-                print(" from {}, {}", .{ store.val, store.ptr });
+                print(" from {}, to ptr at {}", .{ store.val, store.ptr });
             },
             .arg => |arg| {
                 print("arg(%{}, {s})", .{ arg.typ_ref, s.air.get_string(arg.name) });

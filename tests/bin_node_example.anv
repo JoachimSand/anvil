@@ -5,17 +5,17 @@ Node := struct {
 
 BinNode := struct {
 	a : &.own Node;
-	b : i32;
 };
 
 fn test(input : BinNode) -> i8 {
-	// mut node_ref : &.own Node = move @alloc(Node.{c = 1; d = 2;});
+	node := Node.{c = 1; d = 2;};
+	mut node_ref : &.own Node = move @alloc(node);
 	
-	// bin1 : BinNode = BinNode.{ a = move node_ref; b = 3;};
+	bin1 : BinNode = BinNode.{ a = move node_ref;};
 	
-	// mut bin_ref : &.own BinNode = move @alloc(bin1);
+	mut bin_ref : &.own BinNode = move @alloc(move bin1);
 
-	mut bin2 : BinNode = move @free(move bin_ref);
+	// mut bin2 : BinNode = move @free(move bin_ref);
 	// t := @free(bin2.a);
 	
 	// t := @free(move bin1.a);
@@ -35,3 +35,39 @@ fn test(input : BinNode) -> i8 {
 
 // mut bin2 : BinNode = move @free(move bin_ref);
 // node2 : Node = move @free(move bin2.a);
+
+
+
+
+
+/// example 2
+
+// DllNode := struct {
+//   next : ?&DllNode,
+//   prev : ?&.own DllNode,
+// };
+
+
+// hd : ?&.own DllNode;
+
+// hd = move null;
+
+// while k < .. {
+//   new := alloc(DllNode);
+//   new.*.next = null;
+//   new.*.prev = move hd;
+//   hd = move new;
+//   if hd |&hd_ptr| {
+//     if hd.prev |&node| {
+//       node.next = hd;
+//     }
+//   }
+// }
+
+// new_hd : ?&.own DllNode= move hd;
+
+// while match right (move new_hd) |x: &.own DllNode|  
+// { // new_hd : &.own DllNode;
+//   node :DllNode = free(x); 
+//   new_hd = node.prev;
+// }
