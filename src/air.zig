@@ -1223,6 +1223,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 end_block(s, cur_block_inst);
                 const enum_ptr = try air_gen_expr(s, match.expr, null, null, .ref);
                 const match_cases = s.ast.extra.items[match.cases_start..match.cases_end];
+                print("match cases {any} {}\n", .{ match_cases, match_cases.len });
                 for (match_cases) |case_index| {
                     const case = s.ast.nodes.items[case_index].match_case;
                     const case_tag = try s.intern_token(case.tag_id);
@@ -1267,7 +1268,9 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 while (extra < cases_slice.end) {
                     const match_case = s.air.get_extra_struct(AirInst.MatchCase, extra);
                     const match_blk = s.air.instructions.get(match_case.blk);
-                    s.air.instructions.set(@intFromEnum(match_blk.block.end), AirInst{ .br = @enumFromInt(cur_block_inst) });
+                    const br_inst = AirInst{ .br = @enumFromInt(cur_block_inst) };
+
+                    s.air.instructions.set(@intFromEnum(match_blk.block.end) - 1, br_inst);
                     extra += field_count;
                 }
 

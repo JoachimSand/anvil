@@ -181,7 +181,7 @@ pub const TirInst = union(enum) {
         end: Index,
     },
     br: Index,
-    br_cond: struct { cond: Index, blk: Index },
+    // br_cond: struct { cond: Index, blk: Index },
     br_either: struct {
         cond: Index,
         then_blk: Index,
@@ -305,6 +305,7 @@ const TirSpecificError = error{
     MismatchedTypes,
     DerefOnPrimitive,
     DerefOnInvalidType,
+    InvalidTagName,
 };
 
 pub const TirError = TirSpecificError || Allocator.Error;
@@ -654,10 +655,10 @@ pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
                 }
                 print("}}", .{});
             },
-            else => {
-                print("TIR printing for {} is unimplemented \n", .{inst});
-                return error.Unimplemented;
-            },
+            // else => {
+            //     print("TIR printing for {} is unimplemented \n", .{inst});
+            //     return error.Unimplemented;
+            // },
         }
         print(";\n", .{});
         index += 1;
@@ -693,7 +694,7 @@ fn get_val_index(s: *TirState, tir_ref: TirInst.IndexRef) !?Value.Index {
     }
 }
 
-fn get_enum_field(s: *TirState, enum_agg: Type.TirAggregrate, field_name: Air.StringIndex) struct { Type.Field, u32 } {
+fn get_enum_field(s: *TirState, enum_agg: Type.TirAggregrate, field_name: Air.StringIndex) !struct { Type.Field, u32 } {
     var enum_field_index = enum_agg.fields_start;
     while (enum_field_index < enum_agg.fields_end) : (enum_field_index += 1) {
         const cur_field = s.tir.types.get(enum_field_index);
@@ -706,7 +707,7 @@ fn get_enum_field(s: *TirState, enum_agg: Type.TirAggregrate, field_name: Air.St
             else => unreachable,
         }
     }
-    unreachable;
+    return error.InvalidTagName;
 }
 
 fn gen_copy_equiv_type(s: *TirState, type_ref: Type.IndexRef) !Type.IndexRef {
@@ -870,7 +871,7 @@ fn get_tir_inst_ret_type(s: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
 
             switch (inst) {
                 .lt_i8, .lt_i16, .lt_i32, .lt_i64, .lt_u8, .lt_u16, .lt_u32, .lt_u64 => return .tir_boolean,
-                .block, .br, .br_cond, .br_either, .match => return error.NoType,
+                .block, .br, .br_either, .match => return error.NoType,
                 .fn_def => return error.Unimplemented,
                 .enum_project => |project| {
                     // const enum_type = try get_aggregate_type(s, project.enum_type, true);
@@ -1137,7 +1138,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 const tir_tag_contents_val = get_val_index(s, tir_tag_contents) catch null;
                 if (tir_tag_contents_val) |val_index| {
                     const val_type = try get_val_type(s, val_index);
-                    if (type_ref_eq(s, val_type, tag_field_type, false) == false) {
+                    if (type_ref_eq(s, val_type, tag_field_type, true) == false) {
                         return error.MismatchedEnumFieldType;
                     }
 
@@ -1162,7 +1163,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                             if (contents_type != .ptr) {
                                 unreachable;
                             }
-                            if (type_ref_eq(s, contents_type.ptr.deref_type, tag_field_type, false) == false) {
+                            if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false and type_ref_eq_stackref_coerce(s, contents_type_ref, tag_field_type) == false) {
                                 return error.MismatchedEnumFieldType;
                             }
 
@@ -1261,7 +1262,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                     print("tag case begin\n", .{});
                     const case_blk = try tir_gen_blk(s, case.blk, false);
 
-                    const enum_field_tuple = get_enum_field(s, tir_enum, case.tag);
+                    const enum_field_tuple = try get_enum_field(s, tir_enum, case.tag);
                     // const enum_field = enum_field_tuple[0];
                     const tag_num = enum_field_tuple[1];
 
@@ -1278,7 +1279,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
 
                 const tir_enum_type = s.tir.types.get(@intFromEnum(tir_enum_ptr_type)).ptr.deref_type;
                 const tir_enum = try get_aggregate_type(s, tir_enum_type, true);
-                const enum_field_tuple = get_enum_field(s, tir_enum, air_project.tag);
+                const enum_field_tuple = try get_enum_field(s, tir_enum, air_project.tag);
 
                 const tag = enum_field_tuple[1];
 

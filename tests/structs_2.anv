@@ -1,0 +1,5 @@
+
+LLNode := struct {
+	val : u32;
+	next : &.own LLNode;
+};

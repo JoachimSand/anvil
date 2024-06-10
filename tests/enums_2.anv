@@ -1,0 +1,38 @@
+Hobbit := struct {
+	age : u8;
+};
+
+Wizard := struct {
+	age : u64;
+	power : u8;
+};
+
+Character := enum {
+	hob : &.own Hobbit;
+	wiz : Wizard;
+};
+
+fn basic_enums() -> void {
+	
+	bilbo : &.own Hobbit = @alloc(Hobbit.{
+		age = 111;
+	});
+
+	// gandalf := Wizard.{ age = 2019; power = 144; }; 
+	
+	person := Character::hob{ move bilbo };
+	// person_2 := Character::wiz { gandalf };
+
+	// gandalf_age := gandalf.age;
+	
+	match person {
+		hob |bilbo| -> {
+			res := @free(bilbo);
+		}
+		wiz |gandalf| -> {
+			mut res := gandalf;
+		}
+	}
+
+	// var := 3;
+}

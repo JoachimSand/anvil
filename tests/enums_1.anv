@@ -5,16 +5,19 @@ Person := enum {
 	Wizard : i64;
 };
 
-num : u32 = 111;
-person := Person::Hobbit{ num };
+fn basic_enums() -> void {
+	
+	num : u32 = 111;
+	person := Person::Hobbit{ num };
 
-match person {
-	Hobbit |frodo| -> {
-		res := frodo;
+	match person {
+		Hobbit |frodo| -> {
+			res := frodo;
+		}
+		Wizard |gandalf| -> {
+			mut res := gandalf;
+		}
 	}
-	Wizard |gandalf| -> {
-		mut res := gandalf;
-	}
+
+	// var := 3;
 }
-
-var := 3;
