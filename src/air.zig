@@ -532,31 +532,31 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("move({})", .{move});
             },
             .address_of => |ad| {
-                print("address of ({})", .{ad});
+                print("address of {} with cap {}", .{ ad.target, ad.cap });
             },
             .deref => |deref| {
                 print("deref %{}", .{deref});
             },
             .indexing => |id| {
-                print("indexing ({}, {})", .{ id.target, id.index });
+                print("indexing {}, {}", .{ id.target, id.index });
             },
             .zero_array => |zero| {
                 print("zero array with type {}", .{zero});
             },
             .add => |add| {
-                print("add(%{}, %{})", .{ add.lhs, add.rhs });
+                print("add %{}, %{}", .{ add.lhs, add.rhs });
             },
             .lt => |lt| {
-                print("lt(%{} < %{})", .{ lt.lhs, lt.rhs });
+                print("lt %{}, %{}", .{ lt.lhs, lt.rhs });
             },
             // .gt => |gt| {
             //     print("gt(%{} > %{})", .{ gt.lhs, gt.rhs });
             // },
             .type_as => |type_as| {
-                print("type_as(%{}, %{})", .{ type_as.type, type_as.expr });
+                print("type %{} as %{}", .{ type_as.type, type_as.expr });
             },
             .type_of => |type_of| {
-                print("type_of(%{})", .{type_of});
+                print("typeof %{}", .{type_of});
             },
             .type_of_deref => |type_of| {
                 print("type_of_deref(%{})", .{type_of});
@@ -578,7 +578,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .block => |blk| {
                 print("block(%{d}, %{d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
                 try print_air(a, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end), indent + 1);
-                index = @intFromEnum(blk.end);
+                index = @intFromEnum(blk.end) - 1;
 
                 for (0..indent) |_| {
                     print("    ", .{});

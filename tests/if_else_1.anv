@@ -1,7 +1,14 @@
-mut b : i8 = 1;
-if b > 5 {
-	b = 2;
-} else {		
-	b = 3;
+Coord := struct {
+	x : u32;
+	y : u32;
+};
+
+fn test(x : u32, y : u32) -> void {
+	b := 1;
+	mut a := Coord.{x = x; y = y;};
+	if b > 5 {
+		c : i8 = 2;
+	} else {
+		a.x = b;		
+	}
 }
-b = 4;

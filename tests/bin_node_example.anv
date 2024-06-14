@@ -1,38 +1,37 @@
-Node := struct {
-	c : u32;
-	d : u32;
+Coord := struct {
+	x : u32;
+	y : u32;
 };
 
-BinNode := struct {
-	a : &.own Node;
+Ship := struct {
+	pos : &.own Coord;
+	personnel : u8;
 };
 
-fn test(input : BinNode) -> i8 {
-	node := Node.{c = 1; d = 2;};
-	mut node_ref : &.own Node = move @alloc(node);
-	
-	bin1 : BinNode = BinNode.{ a = move node_ref;};
-	// bin2 : BinNode = BinNode.{ a = move node_ref;};
-	
-	mut bin_ref : &.own BinNode = move @alloc(move bin1);
+fn build_ship(personnel : u8) -> void {
+	coord_ref := move @alloc(Coord.{x = 1; y = 2;});
 
-	// mut bin2 : BinNode = move @free(move bin_ref);
+	mut ship := Ship.{pos = move coord_ref; personnel = personnel;};
+	ship_ref :=	move @alloc(ship);
 
-	mut b : i8 = 3;
-	if b > 2 {
-		mut bin2 : BinNode = move @free(move bin_ref);
-		// t := move @free(move bin2.a);
-	} else {
-		// b = 4;
-		mut bin2 : BinNode = move @free(move bin_ref);
-	}
-	b = 5;
-	// mut bin_ref := @alloc(bin1);
-	// TODO: Add move inst after every @memalloc
-	// mut bin_ref := move @alloc(BinNode.{a = move node_ref; b = 1;});
 	
-	// mut bin : BinNode = move @free(move bin_ref);
-	// d := @free(move bin.a);
+
+	// mut node_ref : &.own Node = move @alloc(node);
+	
+	// bin1 : BinNode = BinNode.{ a = move node_ref;};
+	
+	// mut bin_ref : &.own BinNode = move @alloc(move bin1);
+
+
+	// mut b : i8 = 3;
+	// if b > 2 {
+	// 	mut bin2 : BinNode = move @free(move bin_ref);
+	// 	// t := move @free(move bin2.a);
+	// } else {
+	// 	// b = 4;
+	// 	mut bin2 : BinNode = move @free(move bin_ref);
+	// }
+	// b = 5;
 }
 
 

@@ -1,7 +1,43 @@
-fn foo(a : i8, b : u) -> struct { a : &.mut u32; } {
-	mut a := Node.test.{ a= 3;};
-	b = print(t);
-	if a && b |c| {
-		b = c;
+// fn foo(a : i8, b : u8) -> struct { a : &.mut u32; } {
+// 	mut a := Node.test.{ a= 3;};
+// 	b = print(t);
+// 	if a && b |c| {
+// 		b = c;
+// 	}
+// }
+
+Coordinate := struct {
+	x : i32;
+	y : i32;
+};
+
+Ship := enum {
+	carrier : struct { 
+		personnel : u32; 
+		pos : Coordinate;
+	};
+	brigantine : struct { 
+		sails : u8; 
+		pos : Coordinate;
+	};
+};
+
+fn sink_warship(x : i32, y : i32, ship : Ship) -> bool {
+	torpedo := Coordinate.{ x = x; y = y;};
+	mut hit := false;
+	match ship {
+		carrier |carr| -> {
+			if carr.pos.x == torpedo.x and carr.pos.y == torpedo.y {
+				hit = true;
+			}
+		}
+		brigantine |brig| -> {
+			if brig.pos.x == torpedo.x and brig.pos.y == torpedo.y {
+				hit = true;
+			}
+		}
 	}
+	return hit;
 }
+
+
