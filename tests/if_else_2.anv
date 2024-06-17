@@ -1,0 +1,10 @@
+
+fn test() -> void {
+	mut b : i8 = 1; 
+	if b > 5 {
+		b = 2;
+	} else { 
+		b = 3;
+	} 
+	b = 4;
+}

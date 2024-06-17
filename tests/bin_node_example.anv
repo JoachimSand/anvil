@@ -13,8 +13,7 @@ fn build_ship(personnel : u8) -> void {
 
 	mut ship := Ship.{pos = move coord_ref; personnel = personnel;};
 	ship_ref :=	move @alloc(ship);
-
-	
+		
 
 	// mut node_ref : &.own Node = move @alloc(node);
 	
