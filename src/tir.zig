@@ -66,13 +66,13 @@ pub fn type_is_ref(a: Type.IndexRef) bool {
 
 // allow_cap_coercion: If set to true, if a has an ownership ptr type and b has a ref ptr type,
 // accept equality
-fn type_ref_eq(t: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coercion: bool) bool {
+fn type_ref_eq(s: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coercion: bool) bool {
     if (a == b) {
         return true;
     } else {
         if (type_is_ref(a) and type_is_ref(b)) {
-            const a_type = t.tir.types.get(@intFromEnum(a));
-            const b_type = t.tir.types.get(@intFromEnum(b));
+            const a_type = s.tir.types.get(@intFromEnum(a));
+            const b_type = s.tir.types.get(@intFromEnum(b));
 
             if (a_type == .ptr and b_type == .ptr) {
                 if (a_type.ptr.deref_type == b_type.ptr.deref_type) {
@@ -87,22 +87,22 @@ fn type_ref_eq(t: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coerc
             }
         }
         print("Types are not equal: \n", .{});
-        print_type(t, a) catch unreachable;
+        print_type(&s.tir, a) catch unreachable;
         print("\n", .{});
-        print_type(t, b) catch unreachable;
+        print_type(&s.tir, b) catch unreachable;
         print("\n", .{});
         return false;
     }
 }
-fn type_ref_eq_stackref_coerce(t: *TirState, a: Type.IndexRef, b: Type.IndexRef) bool {
+fn type_ref_eq_stackref_coerce(s: *TirState, a: Type.IndexRef, b: Type.IndexRef) bool {
     if (a == b) {
         return true;
     } else {
         if (type_is_ref(a) and type_is_ref(b)) {
-            const a_type = t.tir.types.get(@intFromEnum(a));
+            const a_type = s.tir.types.get(@intFromEnum(a));
             // const b_type = t.tir.types.get(@intFromEnum(b));
 
-            if (a_type == .ptr and a_type.ptr.cap == .tir_stackref and type_ref_eq(t, a_type.ptr.deref_type, b, true)) {
+            if (a_type == .ptr and a_type.ptr.cap == .tir_stackref and type_ref_eq(s, a_type.ptr.deref_type, b, true)) {
                 return true;
             }
 
@@ -119,9 +119,9 @@ fn type_ref_eq_stackref_coerce(t: *TirState, a: Type.IndexRef, b: Type.IndexRef)
             // }
         }
         print("Types are not equal: \n", .{});
-        print_type(t, a) catch unreachable;
+        print_type(&s.tir, a) catch unreachable;
         print("\n", .{});
-        print_type(t, b) catch unreachable;
+        print_type(&s.tir, b) catch unreachable;
         print("\n", .{});
         return false;
     }
@@ -319,6 +319,8 @@ pub const Tir = struct {
     types: Type.List,
     allocator: Allocator,
 
+    air: *Air,
+
     pub const ExtraIndex = u32;
     pub fn deinit(t: *Tir) void {
         t.instructions.deinit(t.allocator);
@@ -407,7 +409,7 @@ const TirState = struct {
     }
 };
 
-fn print_type(s: *TirState, type_ref: Type.IndexRef) !void {
+fn print_type(t: *Tir, type_ref: Type.IndexRef) !void {
     switch (type_ref) {
         .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_void, .tir_typ, .tir_own, .tir_ref, .tir_stackref => {
             print("{s}", .{@tagName(type_ref)});
@@ -415,21 +417,21 @@ fn print_type(s: *TirState, type_ref: Type.IndexRef) !void {
         _ => {
             const type_index = @intFromEnum(type_ref);
 
-            if (type_index >= s.tir.types.len) {
+            if (type_index >= t.types.len) {
                 print("TYPE NOT AVAILABLE", .{});
                 return;
             }
-            const typ = s.tir.types.get(type_index);
+            const typ = t.types.get(type_index);
             switch (typ) {
                 .ptr => |ptr| {
                     print("&.", .{});
-                    try print_type(s, ptr.cap);
+                    try print_type(t, ptr.cap);
                     print(" ", .{});
-                    try print_type(s, ptr.deref_type);
+                    try print_type(t, ptr.deref_type);
                 },
                 .tir_array => |array| {
                     print("[{}]", .{array.size});
-                    try print_type(s, array.element_type);
+                    try print_type(t, array.element_type);
                 },
                 .tir_struct, .tir_enum => |tir_container| {
                     const is_struct = if (typ == .tir_struct) true else false;
@@ -441,20 +443,20 @@ fn print_type(s: *TirState, type_ref: Type.IndexRef) !void {
 
                     var cur_field_index = tir_container.fields_start;
                     while (cur_field_index < tir_container.fields_end) : (cur_field_index += 1) {
-                        const cur_field = s.tir.types.get(cur_field_index);
+                        const cur_field = t.types.get(cur_field_index);
                         switch (cur_field) {
                             .tir_struct_field, .tir_enum_field => |field| {
-                                const field_name = s.air.get_string(field.var_name);
+                                const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("{s} : ", .{field_name});
-                                try print_type(s, field_type);
+                                try print_type(t, field_type);
                                 print(", ", .{});
                             },
                             .tir_mut_struct_field => |field| {
-                                const field_name = s.air.get_string(field.var_name);
+                                const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("mut {s} : ", .{field_name});
-                                try print_type(s, field_type);
+                                try print_type(t, field_type);
                                 print(", ", .{});
                             },
                             else => {
@@ -474,8 +476,8 @@ fn print_type(s: *TirState, type_ref: Type.IndexRef) !void {
     }
 }
 
-fn print_val(s: *TirState, val_index: Value.Index) void {
-    const val = s.tir.values.get(val_index);
+fn print_val(t: *Tir, val_index: Value.Index) void {
+    const val = t.values.get(val_index);
     switch (val) {
         .boolean => |boolean| print("bool, {}", .{boolean}),
         .unknown_int => |int| print("unknown_int, {}", .{int}),
@@ -491,28 +493,28 @@ fn print_val(s: *TirState, val_index: Value.Index) void {
     }
 }
 
-pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
+pub fn print_tir(t: *Tir, start: u32, stop: u32, indent: u32) !void {
     // print("---------- TIR -------------\n", .{});
     var index: u32 = start;
-    while (index < stop and index < s.tir.instructions.len) {
+    while (index < stop and index < t.instructions.len) {
         for (0..indent) |_| {
             print("    ", .{});
         }
 
         print("%{} = ", .{index});
-        const inst = s.tir.instructions.get(index);
+        const inst = t.instructions.get(index);
         switch (inst) {
             // .int => |int| {
             //     print("int({})", .{int});
             // },
             .constant_type => |type_index| {
                 print("constant_type(", .{});
-                try print_type(s, type_index);
+                try print_type(t, type_index);
                 print(")", .{});
             },
             .constant_val => |val_index| {
                 print("constant_val(", .{});
-                print_val(s, val_index);
+                print_val(t, val_index);
                 print(")", .{});
             },
             .add_i8 => |add| {
@@ -546,28 +548,28 @@ pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
 
             .alloca => |alloca| {
                 print("alloca ", .{});
-                try print_type(s, alloca.alloc_type);
+                try print_type(t, alloca.alloc_type);
                 print(", returns type ", .{});
-                try print_type(s, alloca.ret_type);
+                try print_type(t, alloca.ret_type);
             },
             .memalloc => |memalloc| {
                 print("@memalloc %{} returns type ", .{memalloc.expr});
-                try print_type(s, memalloc.ptr_type);
+                try print_type(t, memalloc.ptr_type);
             },
             .memfree => |memfree| {
                 print("@memfree %{} returns type ", .{memfree.ptr});
-                try print_type(s, memfree.expr_type);
+                try print_type(t, memfree.expr_type);
             },
             .address_of => |address_of| {
                 print("address_of %{} with cap %{} returns type ", .{ address_of.target, address_of.cap });
-                try print_type(s, address_of.ptr_type);
+                try print_type(t, address_of.ptr_type);
             },
             .get_element_ptr => |get_elem_ptr| {
                 print("get_element_ptr ", .{});
-                try print_type(s, get_elem_ptr.aggregate_type);
+                try print_type(t, get_elem_ptr.aggregate_type);
                 print(", from {} by ", .{get_elem_ptr.aggregate_ptr});
 
-                const slice = s.tir.extra.items[get_elem_ptr.indeces_start..get_elem_ptr.indeces_end];
+                const slice = t.extra.items[get_elem_ptr.indeces_start..get_elem_ptr.indeces_end];
                 for (slice, 0..) |_, i| {
                     print("{}, ", .{i});
                 }
@@ -575,63 +577,63 @@ pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
             .update_enum_ptr_with_val => |update_enum| {
                 // update_enum.new_tag_val
                 print("update_enum_ptr_with_val ", .{});
-                try print_type(s, update_enum.enum_type);
+                try print_type(t, update_enum.enum_type);
                 print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_val });
             },
             .update_enum_ptr_with_ptr => |update_enum| {
                 // update_enum.new_tag_val
                 print("update_enum_ptr_with_ptr ", .{});
-                try print_type(s, update_enum.enum_type);
+                try print_type(t, update_enum.enum_type);
                 print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_ptr });
             },
             .fn_def => |fn_def| {
-                print("fn def {s} (", .{s.air.get_string(fn_def.name)});
-                const param_extras = s.tir.extra.items[fn_def.params.start..fn_def.params.end];
+                print("fn def {s} (", .{t.air.get_string(fn_def.name)});
+                const param_extras = t.extra.items[fn_def.params.start..fn_def.params.end];
                 for (param_extras) |param_inst| {
                     print("%{}, ", .{param_inst});
                 }
                 print(") -> ", .{});
-                try print_type(s, fn_def.ret_type);
+                try print_type(t, fn_def.ret_type);
                 print(" at blk %{}", .{fn_def.blk});
             },
             .match => |match| {
                 print("match on %{} : ", .{match.enum_ptr});
                 var case_index = match.cases_start;
                 while (case_index < match.cases_end) : (case_index += 1) {
-                    const blk = s.tir.extra.items[case_index];
+                    const blk = t.extra.items[case_index];
                     print("{} -> %{}, ", .{ case_index - match.cases_start, blk });
                 }
             },
             .enum_project => |project| {
                 print("enum_project ", .{});
-                try print_type(s, project.enum_type);
+                try print_type(t, project.enum_type);
                 print(", %{}, tagnum {}, ret_type ", .{ project.enum_ptr, project.tag });
-                try print_type(s, project.ret_type);
+                try print_type(t, project.ret_type);
             },
             .zero_array => |zero_array_type| {
                 print("zero_array of ", .{});
-                try print_type(s, zero_array_type);
+                try print_type(t, zero_array_type);
             },
             .index => |indexing| {
                 print("indexing {} with {} yielding type ", .{ indexing.target, indexing.index });
-                try print_type(s, indexing.elem_type);
+                try print_type(t, indexing.elem_type);
             },
             .constant_index => |indexing| {
                 print("indexing {} with {} yielding type ", .{ indexing.target, indexing.index });
-                try print_type(s, indexing.elem_type);
+                try print_type(t, indexing.elem_type);
             },
             .load => |load| {
                 print("load ", .{});
-                try print_type(s, load.type);
+                try print_type(t, load.type);
                 print(", from {}", .{load.ptr});
             },
             .store => |store| {
                 print("store ", .{});
-                try print_type(s, store.val_type);
+                try print_type(t, store.val_type);
                 print(" from {}, to ptr at {}", .{ store.val, store.ptr });
             },
             .arg => |arg| {
-                print("arg(%{}, {s})", .{ arg.typ_ref, s.air.get_string(arg.name) });
+                print("arg(%{}, {s})", .{ arg.typ_ref, t.air.get_string(arg.name) });
             },
             .move => |move| {
                 print("move %{}", .{move});
@@ -648,7 +650,7 @@ pub fn print_tir(s: *TirState, start: u32, stop: u32, indent: u32) !void {
             },
             .block => |blk| {
                 print("blk %{} to %{} {{\n", .{ blk.start, blk.end });
-                try print_tir(s, blk.start, blk.end + 1, indent + 1);
+                try print_tir(t, blk.start, blk.end + 1, indent + 1);
                 index = blk.end;
                 for (0..indent) |_| {
                     print("    ", .{});
@@ -754,7 +756,7 @@ fn gen_copy_equiv_type(s: *TirState, type_ref: Type.IndexRef) !Type.IndexRef {
                     const new_container_type = Type{ .tir_struct = .{ .fields_start = new_fields_start, .fields_end = new_fields_start + new_fields_len } };
 
                     const new_container_type_ref = try s.append_type(new_container_type);
-                    try print_type(s, new_container_type_ref);
+                    try print_type(&s.tir, new_container_type_ref);
                     return new_container_type_ref;
                     // old
                     // const struct_fields = s.tir.extra.items[tir_struct.fields_start..tir_struct.fields_end];
@@ -834,7 +836,7 @@ fn get_aggregate_type(s: *TirState, type_ref: Type.IndexRef, get_enum: bool) !Ty
                 },
                 else => {
                     print("Expected aggregrate type, got ", .{});
-                    try print_type(s, type_ref);
+                    try print_type(&s.tir, type_ref);
                     return error.ExpectedAggregrateType;
                 },
             }
@@ -1041,8 +1043,8 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
     while (air_index < s.air.instructions.len) : (air_index += 1) {
         print("\nGenerating TIR for AIR instruction: ", .{});
         try air_mod.print_air(s.air, air_index, air_index + 1, 0);
-        print("TIR so far:\n", .{});
-        try print_tir(s, 0, @intCast(s.tir.instructions.len), 0);
+        // print("TIR so far:\n", .{});
+        // try print_tir(s, 0, @intCast(s.tir.instructions.len), 0);
 
         const air_inst = air_instructions.get(air_index);
         switch (air_inst) {
@@ -1616,7 +1618,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                             // print("Val : {}\n", .{val});
 
                             print("Type as for ", .{});
-                            try print_type(s, tir_type_ref);
+                            try print_type(&s.tir, tir_type_ref);
                             print(" not impl.\n", .{});
                             return error.Unimplemented;
                         },
@@ -1872,6 +1874,7 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !Tir {
 
             .values = Value.List{},
             .types = Type.List{},
+            .air = air,
 
             .allocator = allocator,
         },
@@ -1903,7 +1906,7 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !Tir {
     _ = try tir_gen_blk(&tir_state, 0, true);
     // _ = try tir_gen_bb(&tir, 0);
     print("\n=========== GENERATED TIR ===========\n", .{});
-    try print_tir(&tir_state, 0, @intCast(tir_state.tir.instructions.len), 0);
+    try print_tir(&tir_state.tir, 0, @intCast(tir_state.tir.instructions.len), 0);
     print("\n===========               ===========\n", .{});
     return tir_state.tir;
 }

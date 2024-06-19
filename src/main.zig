@@ -15,7 +15,10 @@ const air_mod = @import("air.zig");
 const tir_mod = @import("tir.zig");
 const safety_mod = @import("safety.zig");
 
+const llvm_gen = @import("llvm_gen.zig");
+
 pub fn main() !void {
+
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     print("All your {s} are belong to us.\n", .{"codebase"});
 
@@ -72,16 +75,7 @@ pub fn main() !void {
     defer tir.deinit();
     _ = try safety_mod.check_safety(&tir);
 
-    // print("Root node {any}\n", .{parser.nodes.items[root_id]});
-    // // stdout is for the actual output of your application, for example if you
-    // // are implementing gzip, then only the compressed bytes should be sent to
-    // // stdout, not any debugging messages.
-    // const stdout_file = std.io.getStdOut().writer();
-    // var bw = std.io.bufferedWriter(stdout_file);
-    // const stdout = bw.writer();
-
-    // try stdout.print("Run `zig build test` to run the tests.\n", .{});
-    // try bw.flush(); // don't forget to flush!
+    try llvm_gen.generate_llvm_ir(&tir);
 }
 
 fn test_compiler(file_name: []const u8) !void {

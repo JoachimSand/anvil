@@ -1,10 +1,13 @@
-mut b : i8 = 1;
 
-c := 2+19;
+fn main(argc : u8) -> void {
+	mut b : i8 = 1;
 
-if c < 1002 {
-	e := 2;
-} else {		
-	d := 3;
+	c := 2+19;
+
+	if c < 1002 {
+		e := 2;
+	} else {		
+		d := 3;
+	}
+	e := 4;
 }
-e := 4;
