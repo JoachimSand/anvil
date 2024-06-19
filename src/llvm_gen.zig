@@ -37,8 +37,9 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index) !void {
     const blk = s.tir.instructions.get(blk_index).block;
 
     const instructions = s.tir.instructions.slice();
-    for (blk.start..blk.end) |inst_index_usize| {
-        const inst_index: TirInst.Index = @intCast(inst_index_usize);
+    var inst_index = blk.start;
+    while (inst_index < blk.end) : (inst_index += 1) {
+        // const inst_index: TirInst.Index = @intCast(inst_index_usize);
         const instruction = s.tir.instructions.get(inst_index);
 
         switch (instruction) {
@@ -61,13 +62,30 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index) !void {
                 const func_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), llvm_params.items.ptr, @intCast(llvm_params.items.len), 0);
                 const func: types.LLVMValueRef = core.LLVMAddFunction(s.module, "main", func_type);
                 core.LLVMSetLinkage(func, types.LLVMLinkage.LLVMExternalLinkage);
+                const entry: types.LLVMBasicBlockRef = core.LLVMAppendBasicBlock(func, "entry");
+                core.LLVMPositionBuilderAtEnd(s.builder, entry);
             },
+            .arg => continue,
+            .block => |new_blk| {
+                try generate_llvm_ir_block(s, inst_index);
+                inst_index = new_blk.end;
+            },
+            .alloca => |alloca| {
+                // const u8_index: u8 = @intCast(inst_index);
+                // var buf: [4:0]u8 = .{ u8_index % 10 + 48, 0, 0, 0 };
+                _ = core.LLVMBuildAlloca(s.builder, try tir_type_to_llvm(s.tir, alloca.alloc_type), "");
+            },
+            // .store => |store| {
+            //     store.ptr
+            // },
             .constant_type => continue,
             .constant_val => continue,
             else => {
                 print("LLVM Generation unimplemented for: \n", .{});
                 try tir_mod.print_tir(s.tir, inst_index, inst_index + 1, 0);
 
+                print("LLVM Generation so far: \n", .{});
+                core.LLVMDumpModule(s.module);
                 return error.Unimplemented;
             },
         }
