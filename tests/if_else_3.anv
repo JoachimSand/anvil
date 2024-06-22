@@ -1,13 +1,12 @@
-
 fn main(argc : u8) -> void {
 	mut b : i8 = 1;
 
 	mut c : i16 = 2+19;
 
 	if c < 1002 {
-		e := 2;
+		c = 2;
 	} else {		
-		d := 3;
+		c = 3;
 	}
-	e := 4;
+	c = 4;
 }

@@ -128,8 +128,8 @@ fn type_ref_eq_stackref_coerce(s: *TirState, a: Type.IndexRef, b: Type.IndexRef)
 }
 
 //Compile-time known values.
-const Value = union(enum) {
-    const Index = u32;
+pub const Value = union(enum) {
+    pub const Index = u32;
     const List = std.MultiArrayList(Value);
     unknown_int: i64,
     u64: u64,
@@ -570,8 +570,8 @@ pub fn print_tir(t: *Tir, start: u32, stop: u32, indent: u32) !void {
                 print(", from {} by ", .{get_elem_ptr.aggregate_ptr});
 
                 const slice = t.extra.items[get_elem_ptr.indeces_start..get_elem_ptr.indeces_end];
-                for (slice, 0..) |_, i| {
-                    print("{}, ", .{i});
+                for (slice) |s| {
+                    print("{}, ", .{s});
                 }
             },
             .update_enum_ptr_with_val => |update_enum| {
@@ -1027,7 +1027,7 @@ fn tir_gen_blk(s: *TirState, air_blk_index: AirInst.Index, is_top_level: bool) !
 
     tir_inst.block.end = try tir_gen_bb(s, @intFromEnum(air_blk.block.start) + 1);
     if (is_top_level) {
-        tir_inst.block.end = @intCast(s.tir.instructions.len);
+        tir_inst.block.end = @intCast(s.tir.instructions.len - 1);
     }
 
     // print("Block ends at {}\n", .{tir_inst.block.end});
