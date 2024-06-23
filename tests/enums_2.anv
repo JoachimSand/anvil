@@ -12,7 +12,7 @@ Character := enum {
 	wiz : Wizard;
 };
 
-fn basic_enums() -> void {
+fn main() -> void {
 	
 	bilbo : &.own Hobbit = @alloc(Hobbit.{
 		age = 111;

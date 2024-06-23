@@ -103,7 +103,7 @@ fn tir_val_to_llvm(tir: *Tir, index: Value.Index) !types.LLVMValueRef {
 
 fn copy_struct(s: *LLVMState, topmost_agg_type: types.LLVMTypeRef, type_ref: Type.IndexRef, src_val: types.LLVMValueRef, dest_val: types.LLVMValueRef, gep_fields: *std.ArrayList(types.LLVMValueRef)) !void {
     switch (type_ref) {
-        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int => return error.Unimplemented,
+        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int, .tir_address_of_self => return error.Unimplemented,
         .tir_boolean, .tir_i8, .tir_i16, .tir_i32, .tir_i64, .tir_u8, .tir_u16, .tir_u32, .tir_u64 => {
             const llvm_src_gep = core.LLVMBuildGEP2(s.builder, topmost_agg_type, src_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
             const llvm_load = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, type_ref), llvm_src_gep, "");
@@ -135,14 +135,14 @@ fn copy_struct(s: *LLVMState, topmost_agg_type: types.LLVMTypeRef, type_ref: Typ
                     }
                 },
                 .ptr => |_| {
-                    try gep_fields.append(core.LLVMConstInt(core.LLVMInt32Type(), 0, 0));
+                    // try gep_fields.append(core.LLVMConstInt(core.LLVMInt32Type(), 0, 0));
                     const llvm_src_gep = core.LLVMBuildGEP2(s.builder, topmost_agg_type, src_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
                     const llvm_load = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, type_ref), llvm_src_gep, "");
 
                     const llvm_dst_gep = core.LLVMBuildGEP2(s.builder, topmost_agg_type, dest_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
                     const llvm_store = core.LLVMBuildStore(s.builder, llvm_load, llvm_dst_gep);
                     _ = llvm_store;
-                    _ = gep_fields.pop();
+                    // _ = gep_fields.pop();
                 },
                 else => return error.Unimplemented,
             }
@@ -417,6 +417,7 @@ pub fn generate_llvm_ir(tir: *Tir) !void {
     try llvm_state.tir_llvm_typ_map.put(.tir_u64, core.LLVMInt64Type());
     try llvm_state.tir_llvm_typ_map.put(.tir_unknown_int, core.LLVMInt64Type());
     try llvm_state.tir_llvm_typ_map.put(.tir_void, core.LLVMVoidType());
+    try llvm_state.tir_llvm_typ_map.put(.tir_address_of_self, core.LLVMPointerType(core.LLVMVoidType(), 0));
 
     // Add printf function
     var param_types = [_]types.LLVMTypeRef{core.LLVMPointerType(core.LLVMInt8Type(), 0)};

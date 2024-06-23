@@ -11,10 +11,6 @@ fn main() -> void {
 	b := @free(move bin_ref);
 	
 	@print(b.b);
-	// mut c :BinNode = b;
-	// @print(c.b);
-	// c.a = 4;
-	// @print(c.b);
 	return;
 }
 

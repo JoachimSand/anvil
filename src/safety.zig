@@ -234,7 +234,7 @@ const LinearState = struct {
 
 fn init_mem_node(t: *const Tir, ls: *LinearState, type_ref: Type.IndexRef, inst: TirInst.Index, heap: bool) !MemoryNode.IndexRef {
     switch (type_ref) {
-        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_void, .tir_typ, .tir_own, .tir_ref, .tir_stackref => {
+        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_void, .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_address_of_self => {
             return .val;
         },
         _ => {
@@ -523,6 +523,9 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
             .enum_project => |project| {
                 const ret_type = t.types.get(@intFromEnum(project.ret_type));
                 if (ret_type == .ptr) {
+                    if (type_is_ref(ret_type.ptr.deref_type) == false) {
+                        continue;
+                    }
                     const own_type = t.types.get(@intFromEnum(ret_type.ptr.deref_type));
                     if (own_type == .ptr and own_type.ptr.cap == .tir_own) {} else {
                         continue;
@@ -672,6 +675,21 @@ fn analyse_fn(t: *const Tir, fn_def: TirInst.FnDef) !SafetyRes {
     };
     var res = try analyse_bb(t, &ls, fn_def.blk, true);
     defer res.deinit();
+
+    for (ls.mem_nodes.items) |node| {
+        switch (node) {
+            .aggregrate => |agg| {
+                if (agg.is_heap) {
+                    return error.MemoryLeak;
+                }
+            },
+            .owning_ptr => |_| {
+                return error.MemoryLeak;
+            },
+            else => continue,
+        }
+    }
+
     // if (ls.owners.count() > 0) {
     //     print("Memory leak detected.\n[", .{});
     //     var it = ls.owners.keyIterator();
@@ -698,16 +716,6 @@ fn analyse_fn(t: *const Tir, fn_def: TirInst.FnDef) !SafetyRes {
 // Every allocation must have a closed range i.e. not leak.
 
 pub fn check_safety(t: *const Tir) !SafetyRes {
-
-    // Create a set of u32s called A
-    // var A = set.Set(u32).init(t.allocator);
-    // defer A.deinit();
-
-    // // Add some data
-    // _ = try A.add(5);
-    // _ = try A.add(6);
-    // _ = try A.add(7);
-
     const instructions = t.instructions.slice();
     for (0..instructions.len) |inst_index| {
         const inst = instructions.get(inst_index);

@@ -1,0 +1,14 @@
+fn dll_node(T: type) -> void {
+	Node := struct {
+		val : T;	
+	};
+}
+
+fn main() -> void {
+	int_node := dll_node(i32);
+}
+
+// Node := struct {
+// 	next : &.own Node;	
+// };
+

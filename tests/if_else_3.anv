@@ -3,7 +3,6 @@ fn anvil_main() -> void {
 
 	mut c : i16 = 2+19;
 
-	@alloc(c);
 	if c < 1002 {
 		c = 2;
 	} else {		

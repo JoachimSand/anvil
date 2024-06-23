@@ -14,7 +14,7 @@ fn anvil_main() -> void {
 	mut ship := Ship.{pos = move coord_ref; personnel = 1;};
 	@print(ship.personnel);
 	ship_ref :=	move @alloc(ship);
-	
+
 	ship = move @free(ship_ref);
 	@print(ship.personnel);
 

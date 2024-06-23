@@ -5,7 +5,7 @@ Person := enum {
 	Wizard : i64;
 };
 
-fn basic_enums() -> void {
+fn main() -> void {
 	
 	num : u32 = 111;
 	person := Person::Hobbit{ num };

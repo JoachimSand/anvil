@@ -80,9 +80,10 @@ const pretty_print_mod = @import("pretty_print.zig");
 
 pub const AirInst = union(enum) {
     pub const Index = u32;
+    const RefStart = 4294967040;
     pub const IndexRef = enum(Index) {
         // 2^32 -256
-        bool = 4294967040,
+        bool = RefStart,
         true_lit,
         false_lit,
         i8,
@@ -100,6 +101,14 @@ pub const AirInst = union(enum) {
         type,
         address_of_self,
         _,
+
+        pub fn is_ref(ref: *IndexRef) bool {
+            if (@intFromEnum(ref) < RefStart) {
+                return true;
+            } else {
+                return false;
+            }
+        }
     };
     const List = std.MultiArrayList(AirInst);
     const ExtraSlice = packed struct {
@@ -656,6 +665,16 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                     extra += field_count;
                 }
             },
+            .fn_call => |fn_call| {
+                const fn_name_str = a.get_string(fn_call.name);
+                print("Fn Call {s}: (", .{fn_name_str});
+                var extra = fn_call.params_start;
+                while (extra < fn_call.params_end) : (extra += 1) {
+                    const param_index: AirInst.IndexRef = @enumFromInt(a.extra.items[extra]);
+                    print("%{}, ", .{param_index});
+                }
+                print(")", .{});
+            },
             .enum_project => |project| {
                 const tag = a.get_string(project.tag);
                 print("project %{} to {s}", .{ project.enum_ptr, tag });
@@ -812,6 +831,16 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, load_cap: AirIn
             const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
             return s.append_inst(AirInst{ .print = .{ .expr = param_expr } });
         },
+        .identifier => |id| {
+            const fn_name = try s.intern_token(id);
+            const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+            for (params) |param| {
+                const param_expr = try air_gen_expr(s, param, null, null, load_cap);
+                try s.scratch.append(@intFromEnum(param_expr));
+            }
+            const air_params = try s.pop_scratch_to_extra(params.len);
+            return s.append_inst(AirInst{ .fn_call = .{ .name = fn_name, .params_start = air_params.start, .params_end = air_params.end } });
+        },
         else => return error.Unimplemented,
     }
 }
@@ -882,7 +911,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             print("{} {?}\n", .{ target_node, dest_id });
             if (dest_id) |id| {
                 if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
-                    return .address_of_self;
+                    return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = .ref } });
                 }
             }
             const ref_target = try air_gen_expr(s, ref.target, null, dest_id, load_cap);
@@ -893,7 +922,8 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             print("{} {?}\n", .{ target_node, dest_id });
             if (dest_id) |id| {
                 if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
-                    return .address_of_self;
+                    const ref_cap = try air_gen_expr(s, ref.cap_expr, null, dest_id, load_cap);
+                    return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = ref_cap } });
                 }
             }
             const ref_target = try air_gen_expr(s, ref.target, null, dest_id, load_cap);
