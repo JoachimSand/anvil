@@ -1,12 +1,15 @@
-fn main(argc : u8) -> void {
+fn anvil_main() -> void {
 	mut b : i8 = 1;
 
 	mut c : i16 = 2+19;
 
+	@alloc(c);
 	if c < 1002 {
 		c = 2;
 	} else {		
 		c = 3;
 	}
 	c = 4;
+	@print(c);
+	return;
 }

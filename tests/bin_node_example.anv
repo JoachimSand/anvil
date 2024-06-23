@@ -8,19 +8,15 @@ Ship := struct {
 	personnel : u8;
 };
 
-fn build_ship(personnel : u8) -> void {
+fn anvil_main() -> void {
 	coord_ref := move @alloc(Coord.{x = 1; y = 2;});
 
-	mut ship := Ship.{pos = move coord_ref; personnel = personnel;};
+	mut ship := Ship.{pos = move coord_ref; personnel = 1;};
+	@print(ship.personnel);
 	ship_ref :=	move @alloc(ship);
-		
-
-	// mut node_ref : &.own Node = move @alloc(node);
 	
-	// bin1 : BinNode = BinNode.{ a = move node_ref;};
-	
-	// mut bin_ref : &.own BinNode = move @alloc(move bin1);
-
+	ship = move @free(ship_ref);
+	@print(ship.personnel);
 
 	// mut b : i8 = 3;
 	// if b > 2 {
@@ -31,6 +27,7 @@ fn build_ship(personnel : u8) -> void {
 	// 	mut bin2 : BinNode = move @free(move bin_ref);
 	// }
 	// b = 5;
+	return;
 }
 
 

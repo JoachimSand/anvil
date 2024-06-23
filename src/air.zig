@@ -135,6 +135,11 @@ pub const AirInst = union(enum) {
         blk: Index,
     };
     fn_def: Air.ExtraIndex,
+    fn_call: struct {
+        name: Air.StringIndex,
+        params_start: Air.ExtraIndex,
+        params_end: Air.ExtraIndex,
+    },
     struct_def: ContainerDef,
     enum_def: ContainerDef,
 
@@ -148,6 +153,8 @@ pub const AirInst = union(enum) {
         blk: IndexRef,
     },
     br_either: Air.ExtraIndex,
+    ret_empty,
+    ret: IndexRef,
     match: struct {
         enum_ptr: Index,
         cases_start: Air.ExtraIndex,
@@ -196,6 +203,9 @@ pub const AirInst = union(enum) {
         type: IndexRef,
     },
     memalloc: struct {
+        expr: IndexRef,
+    },
+    print: struct {
         expr: IndexRef,
     },
     memfree: struct {
@@ -268,7 +278,7 @@ const Scope = union(enum) {
     // func_params: struct { params: IdentifierMap, block: IdentifierMap },
 };
 
-const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar, AllocExpectsOneArg, FreeExpectsOneArg };
+const AirSpecificError = error{ Unimplemented, Shadowing, AssignToImm, UndefinedVar, AllocExpectsOneArg, FreeExpectsOneArg, PrintExpectsOneArg };
 
 pub const AirError = AirSpecificError || Allocator.Error || std.fmt.ParseIntError;
 
@@ -615,6 +625,9 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .memfree => |memfree| {
                 print("memfree %{} ", .{memfree.expr});
             },
+            .print => |p| {
+                print("print %{} ", .{p.expr});
+            },
             .get_element_ptr => |extra_index| {
                 const get_element_ptr = a.get_extra_struct(AirInst.GetElementPtr, extra_index);
 
@@ -646,6 +659,12 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             .enum_project => |project| {
                 const tag = a.get_string(project.tag);
                 print("project %{} to {s}", .{ project.enum_ptr, tag });
+            },
+            .ret => |expr| {
+                print("ret {}", .{expr});
+            },
+            .ret_empty => {
+                print("ret_empty ", .{});
             },
             .load => |load| {
                 print("load(%{} with cap {})", .{ load.ptr, load.cap });
@@ -763,6 +782,40 @@ fn air_gen_struct_lit(s: *AirState, target_type_index: Node.Index, assignments: 
     return alloc_inst;
 }
 
+fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, load_cap: AirInst.IndexRef) AirError!AirInst.IndexRef {
+    const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
+
+    const fn_target_node = s.ast.nodes.items[fn_call.target];
+    print("{}\n", .{fn_target_node});
+    switch (fn_target_node) {
+        .built_in_alloc => {
+            const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+            if (params.len != 1) {
+                return error.AllocExpectsOneArg;
+            }
+            const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
+            return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
+        },
+        .built_in_free => {
+            const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+            if (params.len != 1) {
+                return error.FreeExpectsOneArg;
+            }
+            const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
+            return s.append_inst(AirInst{ .memfree = .{ .expr = param_expr } });
+        },
+        .built_in_print => {
+            const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
+            if (params.len != 1) {
+                return error.PrintExpectsOneArg;
+            }
+            const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
+            return s.append_inst(AirInst{ .print = .{ .expr = param_expr } });
+        },
+        else => return error.Unimplemented,
+    }
+}
+
 fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, dest_id: ?Air.StringIndex, load_cap: AirInst.IndexRef) AirError!AirInst.IndexRef {
     print("AIR inst. count is {}\n", .{s.air.instructions.len});
     print("AIR Expr gen for the following node: \n", .{});
@@ -800,30 +853,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             return enum_alloc;
         },
         .fn_call_full => |fn_call_extra| {
-            const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
-
-            const fn_target_node = s.ast.nodes.items[fn_call.target];
-            switch (fn_target_node) {
-                .built_in_alloc => {
-                    const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
-                    if (params.len != 1) {
-                        return error.AllocExpectsOneArg;
-                    }
-                    const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
-                    return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
-                },
-                .built_in_free => {
-                    const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
-                    if (params.len != 1) {
-                        return error.FreeExpectsOneArg;
-                    }
-                    const param_expr = try air_gen_expr(s, params[0], null, null, load_cap);
-                    return s.append_inst(AirInst{ .memfree = .{ .expr = param_expr } });
-                },
-                else => return error.Unimplemented,
-            }
-
-            if (fn_target_node == .built_in_alloc) {} else if (fn_target_node == .built_in_free) {}
+            return air_gen_fn_call(s, fn_call_extra, load_cap);
         },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
@@ -1216,6 +1246,16 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 s.air.instructions.set(@intFromEnum(br_inst), .{ .br_either = br });
                 s.air.instructions.set(@intFromEnum(else_br_end), .{ .br = @enumFromInt(cur_block_inst) });
                 s.air.instructions.set(@intFromEnum(then_br_end), .{ .br = @enumFromInt(cur_block_inst) });
+            },
+            .ret_statement => |ret| {
+                const expr = try air_gen_expr(s, ret.expr, null, null, .ref);
+                _ = try s.append_inst(AirInst{ .ret = expr });
+            },
+            .ret_statement_empty => {
+                _ = try s.append_inst(.ret_empty);
+            },
+            .fn_call_full => |fn_call_extra| {
+                _ = try air_gen_fn_call(s, fn_call_extra, .ref);
             },
             .match_statement => |match| {
                 const match_inst_index = try s.append_inst(undefined);

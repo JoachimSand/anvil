@@ -205,6 +205,9 @@ pub const TirInst = union(enum) {
         ptr: IndexRef,
         expr_type: Type.IndexRef,
     },
+    print: struct {
+        val: IndexRef,
+    },
     alloca: Alloca,
     load: struct {
         ptr: IndexRef,
@@ -254,6 +257,11 @@ pub const TirInst = union(enum) {
         tag: u32,
         ret_type: Type.IndexRef,
     },
+    // ret : struct {
+    //     val : IndexRef,
+
+    // },
+    ret_void,
 
     move: Index,
     // cap_reduce: struct {
@@ -306,6 +314,7 @@ const TirSpecificError = error{
     DerefOnPrimitive,
     DerefOnInvalidType,
     InvalidTagName,
+    UndefinedVar,
 };
 
 pub const TirError = TirSpecificError || Allocator.Error;
@@ -560,6 +569,9 @@ pub fn print_tir(t: *Tir, start: u32, stop: u32, indent: u32) !void {
                 print("@memfree %{} returns type ", .{memfree.ptr});
                 try print_type(t, memfree.expr_type);
             },
+            .print => |p| {
+                print("@print %{} ", .{p.val});
+            },
             .address_of => |address_of| {
                 print("address_of %{} with cap %{} returns type ", .{ address_of.target, address_of.cap });
                 try print_type(t, address_of.ptr_type);
@@ -642,6 +654,9 @@ pub fn print_tir(t: *Tir, start: u32, stop: u32, indent: u32) !void {
             //     print("cap_reduce %{} returns type ", .{cap});
             //     try print_type(s, cap.ret_type);
             // },
+            .ret_void => {
+                print("ret void", .{});
+            },
             .br => |br| {
                 print("br %{}", .{br});
             },
@@ -873,7 +888,7 @@ fn get_tir_inst_ret_type(s: *TirState, inst_ref: TirInst.IndexRef) !Type.IndexRe
 
             switch (inst) {
                 .lt_i8, .lt_i16, .lt_i32, .lt_i64, .lt_u8, .lt_u16, .lt_u32, .lt_u64 => return .tir_boolean,
-                .block, .br, .br_either, .match => return error.NoType,
+                .block, .ret_void, .print, .br, .br_either, .match => return error.NoType,
                 .fn_def => return error.Unimplemented,
                 .enum_project => |project| {
                     // const enum_type = try get_aggregate_type(s, project.enum_type, true);
@@ -1233,7 +1248,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                         // print(" ACCESS FIELD INDEX {} {}\n", .{ a_index, access_field_indeces_start });
                         try s.tir.extra.append(a_index);
                     } else {
-                        unreachable;
+                        return error.UndefinedVar;
                     }
                 }
                 const access_field_indeces_end: Tir.ExtraIndex = @intCast(s.tir.extra.items.len);
@@ -1297,6 +1312,12 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 const tir_project_inst = try s.append_inst(tir_project);
                 try s.air_tir_inst_map.put(@enumFromInt(air_index), tir_project_inst);
             },
+            .ret_empty => {
+                // TODO: Typecheck
+                const tir_ret_inst = try s.append_inst(.ret_void);
+                try s.air_tir_inst_map.put(@enumFromInt(air_index), tir_ret_inst);
+            },
+            .ret => return error.Unimplemented,
             .br => |br| {
                 const air_dst: AirInst.Index = @intFromEnum(br);
 
@@ -1705,6 +1726,11 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index) TirError!TirInst.Index 
                 } else {
                     return error.MemfreeOnInvalidType;
                 }
+            },
+            .print => |p| {
+                const tir_expr = try s.get_inst_mapping(p.expr);
+                const tir_print = try s.append_inst(.{ .print = .{ .val = tir_expr } });
+                try s.air_tir_inst_map.put(@enumFromInt(air_index), tir_print);
             },
             .address_of => |air_address_of| {
                 // We only allow address of types

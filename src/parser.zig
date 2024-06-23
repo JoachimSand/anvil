@@ -79,6 +79,11 @@ pub const Node = union(enum) {
         capture_ref: Index,
         block: Index,
     },
+    ret_statement_empty: struct { ret_token: Token.Index },
+    ret_statement: struct {
+        ret_token: Token.Index,
+        expr: Index,
+    },
 
     assignment: Assignment,
 
@@ -171,6 +176,7 @@ pub const Node = union(enum) {
     identifier: Token.Index,
     built_in_alloc: Token.Index,
     built_in_free: Token.Index,
+    built_in_print: Token.Index,
     integer_lit: Token.Index,
 
     pub const Index = u32;
@@ -656,23 +662,52 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                 // pretty_print_mod.print_ast_start(p., p.scratch.getLast());
 
             },
+            .keyword_return => {
+                const ret_token = p.next_token() catch undefined;
+                peek_tok = try p.peek_token();
+                var node: Node = undefined;
+                if (peek_tok.type != .semicolon) {
+                    const expr = try parse_expr(p, 0);
+                    node = Node{ .ret_statement = .{ .ret_token = ret_token.index, .expr = expr } };
+                } else {
+                    node = Node{ .ret_statement_empty = .{ .ret_token = ret_token.index } };
+                }
+                _ = try p.expect_token(.semicolon);
+                const ret_index = try p.append_node(node);
+                try p.scratch.append(ret_index);
+            },
             // TODO: Variable-only keywords here can be used to start parsing for
             // a variable declaration unconditionally.
             .keyword_mut => {
                 const var_decl = try parse_var_decl(p);
                 try p.scratch.append(var_decl);
             },
-            .identifier => {
+            .identifier, .built_in_alloc, .built_in_free, .built_in_print => {
                 const id_tok = try p.next_token();
-                const maybe_colon = try p.peek_token();
-                if (maybe_colon.type == .colon) {
-                    const var_decl = try parse_var_decl_w_id(p, id_tok, false, false);
-                    try p.scratch.append(var_decl);
-                } else {
-                    const id_node = Node{ .identifier = id_tok.index };
-                    const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
-                    const assignment = try parse_assigment_w_target(p, target, true);
-                    try p.scratch.append(assignment);
+                const second_peek = try p.peek_token();
+                switch (second_peek.type) {
+                    .colon => {
+                        const var_decl = try parse_var_decl_w_id(p, id_tok, false, false);
+                        try p.scratch.append(var_decl);
+                    },
+                    .l_paren => {
+                        const id_node = switch (peek_tok.type) {
+                            .identifier => Node{ .identifier = id_tok.index },
+                            .built_in_alloc => Node{ .built_in_alloc = id_tok.index },
+                            .built_in_free => Node{ .built_in_free = id_tok.index },
+                            .built_in_print => Node{ .built_in_print = id_tok.index },
+                            else => unreachable,
+                        };
+                        const fn_call = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
+                        try p.scratch.append(fn_call);
+                        _ = try p.expect_token(.semicolon);
+                    },
+                    else => {
+                        const id_node = Node{ .identifier = id_tok.index };
+                        const target = try parse_postfix_expr_w_prim(p, try p.append_node(id_node));
+                        const assignment = try parse_assigment_w_target(p, target, true);
+                        try p.scratch.append(assignment);
+                    },
                 }
             },
 
@@ -813,7 +848,10 @@ pub fn parse_statements(p: *Parser) ParseError!?[]Node.Index {
                 try p.scratch.append(match_index);
             },
 
-            else => return error.Unimplemented,
+            else => {
+                print("Parsing statement starting with {} unimplemented.\n", .{peek_tok});
+                return error.Unimplemented;
+            },
         }
 
         statement_count += 1;
@@ -959,6 +997,7 @@ fn parse_postfix_expr(p: *Parser) ParseError!Node.Index {
         .identifier => primary = try p.append_node(Node{ .identifier = tok.index }),
         .built_in_alloc => primary = try p.append_node(Node{ .built_in_alloc = tok.index }),
         .built_in_free => primary = try p.append_node(Node{ .built_in_free = tok.index }),
+        .built_in_print => primary = try p.append_node(Node{ .built_in_print = tok.index }),
 
         .dot => return error.Unimplemented,
 

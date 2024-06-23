@@ -1,6 +1,20 @@
 BinNode := struct {
 	a : u32;
-	b : &BinNode;
+	b : u32;
 };
 
+fn main() -> void {
+	bin := BinNode.{a = 2; b = 3;};
+	@print(bin.b);
+	
+	bin_ref := move @alloc(bin);
+	b := @free(move bin_ref);
+	
+	@print(b.b);
+	// mut c :BinNode = b;
+	// @print(c.b);
+	// c.a = 4;
+	// @print(c.b);
+	return;
+}
 

@@ -167,6 +167,13 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast(a, prefix, false, statement.block);
             try print_ast(a, prefix, true, statement.else_block);
         },
+        .ret_statement_empty => {
+            print("return empty\n", .{});
+        },
+        .ret_statement => |ret| {
+            print("return\n", .{});
+            try print_ast(a, prefix, true, ret.expr);
+        },
 
         .block_empty => {
             print("Empty block\n", .{});
@@ -228,8 +235,9 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             print("Empty Fn call. \n", .{});
         },
         .fn_call_full => |extra| {
-            print("Fn call \n", .{});
+            print("Fn call. \n", .{});
             const fn_call = a.get_extra_struct(Node.FnCallFull, extra);
+            try print_ast(a, prefix, false, fn_call.target);
             try print_ast_slice(a, prefix, fn_call.args);
         },
 
@@ -265,7 +273,7 @@ fn print_ast(a: *Ast, prefix: *std.ArrayList(u8), is_last: bool, cur_node: Parse
             try print_ast(a, prefix, true, slice_type.target);
         },
 
-        .integer_lit, .identifier, .built_in_alloc => |tok_index| {
+        .integer_lit, .identifier, .built_in_alloc, .built_in_free, .built_in_print => |tok_index| {
             const str = a.get_tok_str(tok_index);
             print("{s} \n", .{str});
         },
