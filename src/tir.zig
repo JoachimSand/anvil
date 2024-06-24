@@ -91,6 +91,8 @@ fn type_ref_eq(s: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coerc
                         return false;
                     }
                 }
+            } else if (a_type == .tir_enum and b_type == .tir_enum) {
+                return true;
             }
         }
         print("Types are not equal: \n", .{});
@@ -822,8 +824,10 @@ fn gen_copy_equiv_type(s: *TirState, type_ref: Type.IndexRef) !Type.IndexRef {
                     }
 
                     const new_fields_len: Type.Index = @intCast(tir_container.fields_end - tir_container.fields_start);
-                    const new_container_type = Type{ .tir_struct = .{ .fields_start = new_fields_start, .fields_end = new_fields_start + new_fields_len } };
-
+                    const new_container_type = if (tir_type == .tir_struct)
+                        Type{ .tir_struct = .{ .fields_start = new_fields_start, .fields_end = new_fields_start + new_fields_len } }
+                    else
+                        Type{ .tir_enum = .{ .fields_start = new_fields_start, .fields_end = new_fields_start + new_fields_len } };
                     const new_container_type_ref = try s.append_type(new_container_type);
                     try print_type(&s.tir, new_container_type_ref);
                     return new_container_type_ref;
@@ -1088,11 +1092,11 @@ fn tir_gen_blk(s: *TirState, air_blk_index: AirInst.Index, is_top_level: bool) !
     const tir_blk_index = try s.append_inst(undefined);
     var tir_inst = TirInst{ .block = .{ .start = @intCast(s.tir.instructions.len), .end = undefined } };
     try s.air_tir_inst_map.put(@enumFromInt(air_blk_index), tir_blk_index);
-    print("Block begins at {}\n", .{tir_inst.block.start});
+    // print("Block begins at {}\n", .{tir_inst.block.start});
 
     const air_blk = s.air.instructions.get(air_blk_index);
 
-    print("\nGENERATING BLOCK FROM AIR {d} TO {d}\n", .{ @intFromEnum(air_blk.block.start), @intFromEnum(air_blk.block.end) });
+    // print("\nGENERATING BLOCK FROM AIR {d} TO {d}\n", .{ @intFromEnum(air_blk.block.start), @intFromEnum(air_blk.block.end) });
 
     tir_inst.block.end = try tir_gen_bb(s, @intFromEnum(air_blk.block.start) + 1, true);
     if (is_top_level) {
@@ -1110,8 +1114,8 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
     const air_instructions = s.air.instructions.slice();
     // print("Generating instructions from {}\n", .{air_bb_start});
     while (air_index < s.air.instructions.len) : (air_index += 1) {
-        print("\n{} Generating TIR for AIR instruction: ", .{s.tir.instructions.len});
-        try air_mod.print_air(s.air, air_index, air_index + 1, 0);
+        // print("\n{} Generating TIR for AIR instruction: ", .{s.tir.instructions.len});
+        // try air_mod.print_air(s.air, air_index, air_index + 1, 0);
         // print("TIR so far:\n", .{});
         // try print_tir(&s.tir, 0, @intCast(s.tir.instructions.len), 0);
 
@@ -1125,7 +1129,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 air_index = @intFromEnum(block.end) - 1;
             },
             .fn_def => |fn_def_extra| {
-                print("ADDING FN DEF\n", .{});
+                // print("ADDING FN DEF\n", .{});
                 const fn_def = s.air.get_extra_struct(AirInst.FnDef, fn_def_extra);
                 const tir_ret_type = try s.get_type_mapping(fn_def.ret_type);
 
@@ -1180,7 +1184,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     const fn_def_end: AirInst.Index = @intFromEnum(fn_def_block.end);
                     var fn_def_index = fn_def_info.air_inst;
                     while (fn_def_index < fn_def_end) : (fn_def_index += 1) {
-                        print("Removing mappin for {}\n", .{fn_def_index});
+                        // print("Removing mappin for {}\n", .{fn_def_index});
                         _ = s.air_tir_inst_map.remove(@enumFromInt(fn_def_index));
                         _ = s.air_tir_type_map.remove(@enumFromInt(fn_def_index));
                     }
@@ -1190,7 +1194,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                         const a_index = arg_indeces[extra];
 
                         const arg = try s.get_type_mapping(@enumFromInt(a_index));
-                        print("Remapping {} to {}\n", .{ air_param_indeces[extra], arg });
+                        // print("Remapping {} to {}\n", .{ air_param_indeces[extra], arg });
                         try s.air_tir_type_map.put(@enumFromInt(air_param_indeces[extra]), arg);
                     }
 
@@ -1199,7 +1203,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     const blk_index = try tir_gen_bb(s, fn_def_info.air_inst, true);
                     // try print_tir(&s.tir, air_index, @intCast(s.tir.instructions.len), 0);
 
-                    print("blk index {}\n", .{blk_index});
+                    // print("blk index {}\n", .{blk_index});
                     const blk = s.tir.instructions.get(blk_index).block;
                     const ret_inst = s.tir.instructions.get(blk.end).ret;
                     try s.air_tir_type_map.put(@enumFromInt(air_index), ret_inst.val);
@@ -1421,14 +1425,14 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 var case_index = air_match.cases_start;
                 while (case_index < air_match.cases_end) : (case_index += cases_field_count) {
                     const case = s.air.get_extra_struct(AirInst.MatchCase, case_index);
-                    print("tag case begin\n", .{});
+                    // print("tag case begin\n", .{});
                     const case_blk = try tir_gen_blk(s, case.blk, false);
 
                     const enum_field_tuple = try get_enum_field(s, tir_enum, case.tag);
                     // const enum_field = enum_field_tuple[0];
                     const tag_num = enum_field_tuple[1];
 
-                    print("tag case end {}\n", .{tag_num});
+                    // print("tag case end {}\n", .{tag_num});
                     s.tir.extra.items[cases_start + tag_num] = case_blk;
                 }
                 const tir_match = TirInst{ .match = .{ .enum_ptr = tir_enum_ptr_inst, .cases_start = cases_start, .cases_end = cases_start + num_cases } };
@@ -1842,8 +1846,8 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 } else {
                     const target_type = s.tir.types.get(@intFromEnum(target_type_ref));
                     if (target_type == .ptr and target_type.ptr.cap != .tir_stackref) {
-                        const tir_load = try s.append_inst(TirInst{ .load = .{ .ptr = tir_deref_target, .type = target_type.ptr.deref_type } });
-                        try s.air_tir_inst_map.put(@enumFromInt(air_index), tir_load);
+                        // const tir_load = try s.append_inst(TirInst{ .load = .{ .ptr = tir_deref_target, .type = target_type.ptr.deref_type } });
+                        try s.air_tir_inst_map.put(@enumFromInt(air_index), tir_deref_target);
                     } else {
                         return error.DerefOnInvalidType;
                     }
@@ -1991,7 +1995,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 const inst_index = try s.append_inst(tir_arg);
                 if (tir_type_ref == .tir_typ) {
                     if (s.air_tir_type_map.get(@enumFromInt(air_index))) |arg_type| {
-                        print("AT AIR ARG {} ADDING ARG TYPE MAP TO {}\n", .{ air_index, arg_type });
+                        // print("AT AIR ARG {} ADDING ARG TYPE MAP TO {}\n", .{ air_index, arg_type });
                         try s.air_tir_type_map.put(@enumFromInt(air_index), arg_type);
                     } else {
                         try s.air_tir_type_map.put(@enumFromInt(air_index), .tir_typ);

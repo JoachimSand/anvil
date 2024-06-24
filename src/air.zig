@@ -422,7 +422,7 @@ pub const AirState = struct {
     fn push_var(s: *AirState, var_tok: Token.Index, mutable: bool, inst: AirInst.IndexRef, type_inst: AirInst.IndexRef) AirError!void {
         const str_index = try s.intern_token(var_tok);
 
-        print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
+        // print("Pushing identifier {s}\n", .{tokeniser_mod.token_to_str(s.ast.tokens.get(var_tok), s.ast.src)});
         switch (s.scopes.items[s.scopes.items.len - 1]) {
             .top => |*top| {
                 // if (top.get(str_index)) |_| {
@@ -807,7 +807,7 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, load_cap: AirIn
     const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
 
     const fn_target_node = s.ast.nodes.items[fn_call.target];
-    print("{}\n", .{fn_target_node});
+    // print("{}\n", .{fn_target_node});
     switch (fn_target_node) {
         .built_in_alloc => {
             const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
@@ -848,9 +848,9 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, load_cap: AirIn
 }
 
 fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, dest_id: ?Air.StringIndex, load_cap: AirInst.IndexRef) AirError!AirInst.IndexRef {
-    print("AIR inst. count is {}\n", .{s.air.instructions.len});
-    print("AIR Expr gen for the following node: \n", .{});
-    try pretty_print_mod.print_ast_start(s.ast, index);
+    // print("AIR inst. count is {}\n", .{s.air.instructions.len});
+    // print("AIR Expr gen for the following node: \n", .{});
+    // try pretty_print_mod.print_ast_start(s.ast, index);
 
     const cur_node = s.ast.nodes.items[index];
     switch (cur_node) {
@@ -910,7 +910,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .ref => |ref| {
             const target_node = s.ast.nodes.items[ref.target];
-            print("{} {?}\n", .{ target_node, dest_id });
+            // print("{} {?}\n", .{ target_node, dest_id });
             if (dest_id) |id| {
                 if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
                     return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = .ref } });
@@ -922,7 +922,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .ref_cap => |ref| {
             const target_node = s.ast.nodes.items[ref.target];
-            print("{} {?}\n", .{ target_node, dest_id });
+            // print("{} {?}\n", .{ target_node, dest_id });
             if (dest_id) |id| {
                 if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
                     const ref_cap = try air_gen_expr(s, ref.cap_expr, null, dest_id, load_cap);
@@ -968,7 +968,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .identifier => |tok_index| {
             const id_str = s.ast.get_tok_str(tok_index);
-            print("Id str {s}\n", .{id_str});
+            // print("Id str {s}\n", .{id_str});
             if (PrimitiveIdMap.get(id_str)) |prim_index| {
                 return prim_index;
             }
@@ -1014,7 +1014,7 @@ fn expr_owns_memory(s: *AirState, expr_inst_ref: AirInst.IndexRef) bool {
 }
 
 fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.Index, expr: ?Node.Index) !void {
-    print("AIR GEN DECL WITH {s}\n", .{s.air.get_string(try s.intern_token(id))});
+    // print("AIR GEN DECL WITH {s}\n", .{s.air.get_string(try s.intern_token(id))});
     const id_str = try s.intern_token(id);
     var expr_inst_ref: AirInst.IndexRef = undefined;
     if (expr) |expr_node| {
@@ -1136,8 +1136,8 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
     var cur_block_inst = start_block;
     for (s_indeces) |s_index| {
         const statement = s.ast.nodes.items[s_index];
-        print("AIR inst. count is {}\n", .{s.air.instructions.len});
-        print("AIR gen for statement {}\n", .{statement});
+        // print("AIR inst. count is {}\n", .{s.air.instructions.len});
+        // print("AIR gen for statement {}\n", .{statement});
         switch (statement) {
             .block => |_| _ = try air_gen_scoped_block(s, s_index, true, dest_id),
 
@@ -1296,7 +1296,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 end_block(s, cur_block_inst);
                 const enum_ptr = try air_gen_expr(s, match.expr, null, null, .ref);
                 const match_cases = s.ast.extra.items[match.cases_start..match.cases_end];
-                print("match cases {any} {}\n", .{ match_cases, match_cases.len });
+                // print("match cases {any} {}\n", .{ match_cases, match_cases.len });
                 for (match_cases) |case_index| {
                     const case = s.ast.nodes.items[case_index].match_case;
                     const case_tag = try s.intern_token(case.tag_id);
@@ -1357,7 +1357,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
             },
         }
     }
-    print(" AT END AIR inst. count is {}\n", .{s.air.instructions.len});
+    // print(" AT END AIR inst. count is {}\n", .{s.air.instructions.len});
     end_block(s, cur_block_inst);
 }
 fn get_block_statements(s: *AirState, n_index: Node.Index) ![]const Node.Index {

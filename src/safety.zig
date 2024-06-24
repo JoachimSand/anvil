@@ -108,11 +108,11 @@ const LinearState = struct {
         var key_it = ls.inst_states.keyIterator();
         while (key_it.next()) |key| {
             if (key.* >= ignore_above) {
-                print("Ignoring {}\n", .{key.*});
+                // print("Ignoring {}\n", .{key.*});
                 continue;
             }
 
-            print("Searching for match to key {}\n", .{key.*});
+            // print("Searching for match to key {}\n", .{key.*});
             const ref = ls.inst_states.get(key.*).?;
             if (ref == .val or ref == .uninit) {
                 continue;
@@ -121,7 +121,7 @@ const LinearState = struct {
             var match = false;
             var other_it = other.inst_states.keyIterator();
             while (other_it.next()) |o_key| {
-                print("Comparing with {}\n", .{o_key.*});
+                // print("Comparing with {}\n", .{o_key.*});
                 const ref_a = ls.inst_states.get(key.*).?;
                 const ref_b = other.inst_states.get(o_key.*).?;
                 const equals = equal_mem_refs(ls, other, ref_a, ref_b);
@@ -133,17 +133,17 @@ const LinearState = struct {
             if (match) {
                 continue;
             }
-            print("Failed\n", .{});
+            // print("Failed\n", .{});
             return false;
         }
         var other_it = other.inst_states.keyIterator();
         while (other_it.next()) |o_key| {
             if (o_key.* >= ignore_above) {
-                print("Ignoring {}\n", .{o_key.*});
+                // print("Ignoring {}\n", .{o_key.*});
                 continue;
             }
 
-            print("Searching for match to key {}\n", .{o_key.*});
+            // print("Searching for match to key {}\n", .{o_key.*});
             const ref = other.inst_states.get(o_key.*).?;
             if (ref == .val or ref == .uninit) {
                 continue;
@@ -152,7 +152,7 @@ const LinearState = struct {
             var match = false;
             var second_key_it = ls.inst_states.keyIterator();
             while (second_key_it.next()) |key| {
-                print("Comparing with {}\n", .{key.*});
+                // print("Comparing with {}\n", .{key.*});
                 const ref_a = other.inst_states.get(o_key.*).?;
                 const ref_b = ls.inst_states.get(key.*).?;
                 const equals = equal_mem_refs(ls, other, ref_a, ref_b);
@@ -164,7 +164,7 @@ const LinearState = struct {
             if (match) {
                 continue;
             }
-            print("Failed\n", .{});
+            // print("Failed\n", .{});
             return false;
         }
         return true;
@@ -210,9 +210,9 @@ const LinearState = struct {
     }
 
     fn move_mem_node(ls: *LinearState, from: TirInst.Index, to: TirInst.Index) !void {
-        print("Moving owner from {} to {}\n", .{ from, to });
+        // print("Moving owner from {} to {}\n", .{ from, to });
         const mem_node = ls.inst_states.get(from) orelse return error.MovingNonOwner;
-        print("Mem node moved is {}\n", .{mem_node});
+        // print("Mem node moved is {}\n", .{mem_node});
         _ = ls.inst_states.remove(from);
         try put_own_node(ls, to, mem_node);
     }
@@ -373,8 +373,8 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
     for (block.start..block.end + 1) |inst_index| {
         const index: u32 = @intCast(inst_index);
         const inst = instructions.get(inst_index);
-        ls.print_linear_state();
-        print("\nafter {} : ", .{inst_index});
+        // ls.print_linear_state();
+        // print("\nafter {} : ", .{inst_index});
         switch (inst) {
             .alloca => |alloca| {
                 const mem_node = try init_mem_node(t, ls, alloca.alloc_type, index, false);
@@ -407,7 +407,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                                 const to_inst: TirInst.Index = @intFromEnum(gep.aggregate_ptr);
                                 const from_node_ref = ls.inst_states.get(from_inst).?;
                                 var to_node_ref = ls.inst_states.get(to_inst).?;
-                                print("GEP: to {} from {}\n", .{ to_node_ref, from_node_ref });
+                                // print("GEP: to {} from {}\n", .{ to_node_ref, from_node_ref });
 
                                 const slice = t.extra.items[gep.indeces_start..gep.indeces_end];
                                 for (slice) |f_index| {
@@ -428,7 +428,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                                 // const final_f_index = t.extra.items[gep.indeces_end - 1];
                                 var to_node = ls.mem_nodes.items[@intFromEnum(to_node_ref)];
 
-                                print("GEP: to {} from {}\n", .{ to_node_ref, from_node_ref });
+                                // print("GEP: to {} from {}\n", .{ to_node_ref, from_node_ref });
                                 // var new_to_node: MemoryNode.IndexRef = undefined;
 
                                 switch (to_node) {
@@ -454,7 +454,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                         }
                     }
                 }
-                print("\n", .{});
+                // print("\n", .{});
             },
             .load => |load| {
                 if (type_is_ref(load.type)) {
@@ -464,7 +464,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                         switch (ptr_inst) {
                             .get_element_ptr => |gep| {
                                 const from_inst: TirInst.Index = @intFromEnum(gep.aggregate_ptr);
-                                print("Extrating a node from inst {}\n", .{from_inst});
+                                // print("Extrating a node from inst {}\n", .{from_inst});
                                 var from_node_ref = ls.inst_states.get(from_inst) orelse return error.LoadingMovedValue;
 
                                 const slice = t.extra.items[gep.indeces_start..gep.indeces_end];
@@ -479,7 +479,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                                 const old_from_node = ls.mem_nodes.items[@intFromEnum(from_node_ref)];
                                 // Remove ownership from the old node
                                 ls.mem_nodes.items[@intFromEnum(from_node_ref)] = .unowned_ptr;
-                                print("Extracting {}\n", .{old_from_node});
+                                // print("Extracting {}\n", .{old_from_node});
 
                                 // Update
                                 _ = ls.inst_states.remove(from_inst);
@@ -494,7 +494,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                         }
                     }
                 }
-                print("\n", .{});
+                // print("\n", .{});
             },
             .update_enum_ptr_with_ptr => |up_enum| {
                 // Destination is a memory node owned by enum_ptr.
@@ -559,7 +559,7 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                 for (case_slice, 0..) |blk, ci| {
                     _ = try analyse_bb(t, &case_states[ci], blk, false);
                 }
-                print("\n\n", .{});
+                // print("\n\n", .{});
                 const enum_node_ref = ls.inst_states.get(@intFromEnum(match.enum_ptr)).?;
                 const enum_node_index: MemoryNode.Index = @intFromEnum(enum_node_ref);
 
@@ -573,8 +573,8 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                 // case_0_enum.aggregrate.fields[1] = case_1_enum.aggregrate.fields[1];
                 // case_1_enum.aggregrate.fields[0] = case_0_enum.aggregrate.fields[0];
 
-                case_states[0].print_linear_state();
-                case_states[1].print_linear_state();
+                // case_states[0].print_linear_state();
+                // case_states[1].print_linear_state();
 
                 if (case_states[0].is_equal(&case_states[1], index) == false) {
                     return error.OwnershipDiverges;
@@ -594,10 +594,10 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                     // defer else_ls.deinit();
                     _ = try analyse_bb(t, &then_ls, br.then_blk, false);
                     _ = try analyse_bb(t, &else_ls, br.else_blk, false);
-                    print("\n Then LS {}", .{then_ls});
-                    then_ls.print_linear_state();
-                    print("\n Else LS {}\n", .{else_ls});
-                    else_ls.print_linear_state();
+                    // print("\n Then LS {}", .{then_ls});
+                    // then_ls.print_linear_state();
+                    // print("\n Else LS {}\n", .{else_ls});
+                    // else_ls.print_linear_state();
 
                     if (then_ls.is_equal(&else_ls, index) == false) {
                         return error.OwnershipDiverges;
@@ -611,11 +611,11 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
                 return;
             },
             else => {
-                print("Ignoring\n", .{});
+                // print("Ignoring\n", .{});
             },
         }
     }
-    ls.print_linear_state();
+    // ls.print_linear_state();
     return ls.*;
 }
 
