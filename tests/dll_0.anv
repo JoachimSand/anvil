@@ -1,14 +1,41 @@
-fn dll_node(T: type) -> void {
-	Node := struct {
-		val : T;	
+// fn dll_node(T: type) -> type {
+// 	return struct {
+// 		val : T;	
+// 	};
+// }
+
+// fn id(T: type) -> type {
+// 	return T;
+// }
+
+
+fn Option(T: type) -> type {
+	return enum {
+		Some: T;
+		None: void;
 	};
 }
 
 fn main() -> void {
-	int_node := dll_node(i32);
+	// dll_type : type = dll_node(i32);
+	// int_node := dll_type.{val = 3;};
+	BinNode := struct {a : i32; b : i32;};
+	RefOpt := Option(&.own BinNode);
+
+	my_ref := move @alloc(BinNode.{a = 2; b = 3;});
+	// @free(move my_ref);
+	ref_opt := RefOpt::None{null};
+	// match ref_opt {
+	// 	Some |s| -> {
+	// 		// @free(s);
+	// 		@print(1);
+	// 	}
+	// 	None |v| -> {
+	// 		@print(2);
+	// 	}
+	// }
+	// return;
+	// int : i32 = 2;
+	// my_opt := IntOpt::Some{int}; 
+	return;
 }
-
-// Node := struct {
-// 	next : &.own Node;	
-// };
-

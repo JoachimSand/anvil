@@ -234,7 +234,7 @@ const LinearState = struct {
 
 fn init_mem_node(t: *const Tir, ls: *LinearState, type_ref: Type.IndexRef, inst: TirInst.Index, heap: bool) !MemoryNode.IndexRef {
     switch (type_ref) {
-        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_void, .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_address_of_self => {
+        .tir_boolean, .tir_unknown_int, .tir_u64, .tir_u32, .tir_u16, .tir_u8, .tir_i64, .tir_i32, .tir_i16, .tir_i8, .tir_void, .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_opaque => {
             return .val;
         },
         _ => {
@@ -565,8 +565,10 @@ fn analyse_bb(t: *const Tir, ls: *LinearState, bb: TirInst.Index, continue_child
 
                 const case_0_enum = case_states[0].mem_nodes.items[enum_node_index];
                 const case_1_enum = case_states[1].mem_nodes.items[enum_node_index];
-                case_states[0].copy_over_node(&case_states[1], @intFromEnum(case_1_enum.aggregrate.fields[1]));
-                case_states[1].copy_over_node(&case_states[0], @intFromEnum(case_0_enum.aggregrate.fields[0]));
+                if (@intFromEnum(case_1_enum.aggregrate.fields[1]) < MemoryNode.RefStart)
+                    case_states[0].copy_over_node(&case_states[1], @intFromEnum(case_1_enum.aggregrate.fields[1]));
+                if (@intFromEnum(case_0_enum.aggregrate.fields[0]) < MemoryNode.RefStart)
+                    case_states[1].copy_over_node(&case_states[0], @intFromEnum(case_0_enum.aggregrate.fields[0]));
 
                 // case_0_enum.aggregrate.fields[1] = case_1_enum.aggregrate.fields[1];
                 // case_1_enum.aggregrate.fields[0] = case_0_enum.aggregrate.fields[0];

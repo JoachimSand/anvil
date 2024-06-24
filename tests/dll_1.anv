@@ -1,0 +1,33 @@
+
+fn Option(T: type) -> type {
+	return enum {
+		Some: T;
+		None: void;
+	};
+}
+
+DllNode := struct {
+	val : i32;
+	prev : Option(&DllNode);
+	next : Option(&.own DllNode);
+};
+
+PrevOpt := Option(&DllNode);
+NextOpt := Option(&.own DllNode);
+// None := Option()
+
+fn main() -> void {
+
+	prev := PrevOpt::None{null};
+	next := NextOpt::None{null};
+	first_node := DllNode.{ val = 1; prev = prev; next = next;};
+	mut hd := move @alloc(first_node);
+	
+	mut k : i32 = 0;
+	while k < 0 {
+		k += 1;
+
+
+	}
+	return;
+}

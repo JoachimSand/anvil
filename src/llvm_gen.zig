@@ -73,6 +73,27 @@ fn tir_type_to_llvm(s: *LLVMState, type_ref: Type.IndexRef) !types.LLVMTypeRef {
                 }
                 return core.LLVMStructType(field_types.items.ptr, @intCast(field_types.items.len), 0);
             },
+            .tir_enum => |_| {
+                var field_types = std.ArrayList(types.LLVMTypeRef).init(s.tir.allocator);
+                defer field_types.deinit();
+                try field_types.append(try s.get_typ_mapping(.tir_u8));
+                // try field_types.append(core.LLVMArrayType(try s.get_typ_mapping(.tir_i32), 4));
+                try field_types.append(core.LLVMPointerType(core.LLVMVoidType(), 0));
+
+                // var cur_field_index = tir_enum.fields_start;
+                // while (cur_field_index < tir_enum.fields_end) : (cur_field_index += 1) {
+                //     const cur_field = s.tir.types.get(cur_field_index);
+                //     switch (cur_field) {
+                //         .tir_enum_field => |field| {
+                //             const field_type = field.field_type;
+                //             const llvm_type = try tir_type_to_llvm(s, field_type);
+                //             try field_types.append(llvm_type);
+                //         },
+                //         else => unreachable,
+                //     }
+                // }
+                return core.LLVMStructType(field_types.items.ptr, @intCast(field_types.items.len), 0);
+            },
             .ptr => |ptr| {
                 const element_typ = try tir_type_to_llvm(s, ptr.deref_type);
                 return core.LLVMPointerType(element_typ, 0);
@@ -87,6 +108,7 @@ fn tir_type_to_llvm(s: *LLVMState, type_ref: Type.IndexRef) !types.LLVMTypeRef {
 fn tir_val_to_llvm(tir: *Tir, index: Value.Index) !types.LLVMValueRef {
     const value = tir.values.get(index);
     switch (value) {
+        .null_val => return error.Unimplemented,
         .unknown_int => |val| return core.LLVMConstInt(core.LLVMInt64Type(), @intCast(val), 0),
         .u8 => |val| return core.LLVMConstInt(core.LLVMInt8Type(), @intCast(val), 0),
         .u16 => |val| return core.LLVMConstInt(core.LLVMInt16Type(), @intCast(val), 0),
@@ -103,7 +125,7 @@ fn tir_val_to_llvm(tir: *Tir, index: Value.Index) !types.LLVMValueRef {
 
 fn copy_struct(s: *LLVMState, topmost_agg_type: types.LLVMTypeRef, type_ref: Type.IndexRef, src_val: types.LLVMValueRef, dest_val: types.LLVMValueRef, gep_fields: *std.ArrayList(types.LLVMValueRef)) !void {
     switch (type_ref) {
-        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int, .tir_address_of_self => return error.Unimplemented,
+        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int, .tir_opaque => return error.Unimplemented,
         .tir_boolean, .tir_i8, .tir_i16, .tir_i32, .tir_i64, .tir_u8, .tir_u16, .tir_u32, .tir_u64 => {
             const llvm_src_gep = core.LLVMBuildGEP2(s.builder, topmost_agg_type, src_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
             const llvm_load = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, type_ref), llvm_src_gep, "");
@@ -133,6 +155,14 @@ fn copy_struct(s: *LLVMState, topmost_agg_type: types.LLVMTypeRef, type_ref: Typ
                             },
                         }
                     }
+                },
+                .tir_enum => |_| {
+                    try gep_fields.append(core.LLVMConstInt(core.LLVMInt32Type(), 0, 0));
+                    try copy_struct(s, topmost_agg_type, .tir_i8, src_val, dest_val, gep_fields);
+                    _ = gep_fields.pop();
+                    try gep_fields.append(core.LLVMConstInt(core.LLVMInt32Type(), 1, 0));
+                    try copy_struct(s, topmost_agg_type, .tir_u64, src_val, dest_val, gep_fields);
+                    _ = gep_fields.pop();
                 },
                 .ptr => |_| {
                     // try gep_fields.append(core.LLVMConstInt(core.LLVMInt32Type(), 0, 0));
@@ -165,20 +195,36 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
     const instructions = s.tir.instructions.slice();
     var inst_index = blk.start;
     while (inst_index <= blk.end) : (inst_index += 1) {
+        print("TIR Index: {}\n", .{inst_index});
         // const inst_index: TirInst.Index = @intCast(inst_index_usize);
         const instruction = s.tir.instructions.get(inst_index);
         const inst_ref: TirInst.IndexRef = @enumFromInt(inst_index);
 
         switch (instruction) {
             .fn_def => |fn_def| {
+                print("Fn def\n", .{});
                 var llvm_params = std.ArrayList(types.LLVMTypeRef).init(s.tir.allocator);
                 defer llvm_params.deinit();
 
                 const tir_params = s.tir.extra.items[fn_def.params.start..fn_def.params.end];
+                var is_comptime = false;
                 for (tir_params) |param_inst_index| {
                     const param_inst = instructions.get(param_inst_index).arg;
+                    print("Param typ ref {}\n", .{param_inst.typ_ref});
+                    if (param_inst.typ_ref == .tir_typ) {
+                        is_comptime = true;
+                        break;
+                    }
                     const llvm_param_type = try tir_type_to_llvm(s, param_inst.typ_ref);
                     try llvm_params.append(llvm_param_type);
+                }
+
+                if (is_comptime) {
+                    print("Skipping comptime function\n", .{});
+                    const fn_def_blk = s.tir.instructions.get(fn_def.blk).block;
+                    inst_index = @intCast(fn_def_blk.end);
+                    llvm_params.deinit();
+                    continue;
                 }
 
                 // var params: [2]types.LLVMTypeRef = [_]types.LLVMTypeRef{
@@ -241,6 +287,10 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
                 const llvm_ret_void = core.LLVMBuildRetVoid(s.builder);
                 try s.tir_llvm_val_map.put(inst_ref, llvm_ret_void);
             },
+            // .ret_empty => {
+            //     const llvm_ret_void = core.LLVMBuildRetVoid(s.builder);
+            //     try s.tir_llvm_val_map.put(inst_ref, llvm_ret_void);
+            // },
             .alloca => |alloca| {
                 // const u8_index: u8 = @intCast(inst_index);
                 // var buf: [4:0]u8 = .{ u8_index % 10 + 48, 0, 0, 0 };
@@ -286,6 +336,13 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
                 const llvm_rhs = try s.get_inst_mapping(lt.rhs);
                 const llvm_lt = core.LLVMBuildICmp(s.builder, types.LLVMIntPredicate.LLVMIntULT, llvm_lhs, llvm_rhs, "");
                 try s.tir_llvm_val_map.put(inst_ref, llvm_lt);
+            },
+            .add_i8, .add_i16, .add_i32, .add_i64, .add_u8, .add_u16, .add_u32, .add_u64 => |add| {
+                const llvm_lhs = try s.get_inst_mapping(add.lhs);
+                const llvm_rhs = try s.get_inst_mapping(add.rhs);
+                const llvm_add = core.LLVMBuildAdd(s.builder, llvm_lhs, llvm_rhs, "");
+                // const llvm_lt = core.LLVMBuildICmp(s.builder, types.LLVMIntPredicate.LLVMIntSLT, llvm_lhs, llvm_rhs, "");
+                try s.tir_llvm_val_map.put(inst_ref, llvm_add);
             },
             .constant_type => |type_ref| {
                 const typ = try tir_type_to_llvm(s, type_ref);
@@ -339,6 +396,57 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
                 var args = [_]types.LLVMValueRef{ llvm_str, llvm_arg };
 
                 _ = core.LLVMBuildCall2(s.builder, s.print_func_type, s.print_func, &args, 2, "");
+            },
+            .update_enum_ptr_with_ptr => |update_enum| {
+                var content_fields = [_]types.LLVMValueRef{ core.LLVMConstInt(core.LLVMInt32Type(), 0, 0), core.LLVMConstInt(core.LLVMInt32Type(), 1, 0) };
+                var tag_fields = [_]types.LLVMValueRef{ core.LLVMConstInt(core.LLVMInt32Type(), 0, 0), core.LLVMConstInt(core.LLVMInt32Type(), 0, 0) };
+                const llvm_enum_type = try tir_type_to_llvm(s, update_enum.enum_type);
+                const llvm_enum_ptr = try s.get_inst_mapping(update_enum.enum_ptr);
+                const llvm_contents_ptr = try s.get_inst_mapping(update_enum.new_tag_ptr);
+
+                const llvm_load_contents = core.LLVMBuildLoad2(s.builder, core.LLVMPointerType(core.LLVMVoidType(), 0), llvm_contents_ptr, "");
+
+                const llvm_contents_dest = core.LLVMBuildGEP2(s.builder, llvm_enum_type, llvm_enum_ptr, &content_fields, @intCast(content_fields.len), "");
+                const llvm_store_contents = core.LLVMBuildStore(s.builder, llvm_load_contents, llvm_contents_dest);
+                _ = llvm_store_contents;
+
+                const llvm_tag_dest = core.LLVMBuildGEP2(s.builder, llvm_enum_type, llvm_enum_ptr, &tag_fields, @intCast(tag_fields.len), "");
+                const llvm_store_tag = core.LLVMBuildStore(s.builder, core.LLVMConstInt(core.LLVMInt32Type(), update_enum.new_tag, 0), llvm_tag_dest);
+                _ = llvm_store_tag;
+                // const llvm_tag_contents_ptr = try s.get_inst_mapping(update_enum.new_tag_ptr);
+
+                // const llvm_gep_tag_contents = core.LLVMBuildGEP2(s.builder, llvm_enum_type, , &tag_content_fields, @intCast(tag_content_fields.len), "");
+                // const llvm_load_tag = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, try s.get_typ_mapping(.tir_u8)), llvm_gep_tag_contents, "");
+
+                // const llvm_dst_gep = core.LLVMBuildGEP2(s.builder, llvm_enum_type, dest_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
+                // const llvm_store = core.LLVMBuildStore(s.builder, llvm_load_tag, llvm_contents_dest);
+            },
+            .update_enum_ptr_with_val => |update_enum| {
+                var content_fields = [_]types.LLVMValueRef{ core.LLVMConstInt(core.LLVMInt32Type(), 0, 0), core.LLVMConstInt(core.LLVMInt32Type(), 1, 0) };
+                var tag_fields = [_]types.LLVMValueRef{ core.LLVMConstInt(core.LLVMInt32Type(), 0, 0), core.LLVMConstInt(core.LLVMInt32Type(), 0, 0) };
+                const llvm_enum_type = try tir_type_to_llvm(s, update_enum.enum_type);
+                const llvm_enum_ptr = try s.get_inst_mapping(update_enum.enum_ptr);
+
+                if (update_enum.new_tag_val != .tir_null_lit) {
+                    const llvm_val = try tir_val_to_llvm(s.tir, @intFromEnum(update_enum.new_tag_val));
+                    const llvm_contents_dest = core.LLVMBuildGEP2(s.builder, llvm_enum_type, llvm_enum_ptr, &content_fields, @intCast(content_fields.len), "");
+                    const llvm_store_contents = core.LLVMBuildStore(s.builder, llvm_val, llvm_contents_dest);
+                    _ = llvm_store_contents;
+                }
+
+                const llvm_tag_dest = core.LLVMBuildGEP2(s.builder, llvm_enum_type, llvm_enum_ptr, &tag_fields, @intCast(tag_fields.len), "");
+                const llvm_store_tag = core.LLVMBuildStore(s.builder, core.LLVMConstInt(core.LLVMInt32Type(), update_enum.new_tag, 0), llvm_tag_dest);
+                _ = llvm_store_tag;
+                // const llvm_tag_contents_ptr = try s.get_inst_mapping(update_enum.new_tag_ptr);
+
+                // const llvm_gep_tag_contents = core.LLVMBuildGEP2(s.builder, llvm_enum_type, , &tag_content_fields, @intCast(tag_content_fields.len), "");
+                // const llvm_load_tag = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, try s.get_typ_mapping(.tir_u8)), llvm_gep_tag_contents, "");
+
+                // const llvm_dst_gep = core.LLVMBuildGEP2(s.builder, llvm_enum_type, dest_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
+                // const llvm_store = core.LLVMBuildStore(s.builder, llvm_load_tag, llvm_contents_dest);
+            },
+            .match => {
+                continue;
             },
             else => {
                 print("LLVM Generation so far: \n", .{});
@@ -417,7 +525,7 @@ pub fn generate_llvm_ir(tir: *Tir) !void {
     try llvm_state.tir_llvm_typ_map.put(.tir_u64, core.LLVMInt64Type());
     try llvm_state.tir_llvm_typ_map.put(.tir_unknown_int, core.LLVMInt64Type());
     try llvm_state.tir_llvm_typ_map.put(.tir_void, core.LLVMVoidType());
-    try llvm_state.tir_llvm_typ_map.put(.tir_address_of_self, core.LLVMPointerType(core.LLVMVoidType(), 0));
+    try llvm_state.tir_llvm_typ_map.put(.tir_opaque, core.LLVMPointerType(core.LLVMVoidType(), 0));
 
     // Add printf function
     var param_types = [_]types.LLVMTypeRef{core.LLVMPointerType(core.LLVMInt8Type(), 0)};

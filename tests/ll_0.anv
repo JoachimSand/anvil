@@ -1,0 +1,30 @@
+
+fn Option(T: type) -> type {
+	return enum {
+		Some: T;
+		None: void;
+	};
+}
+
+LLNode := struct {
+	val : i32;
+	next : Option(&.own LLNode);
+};
+
+NextOpt := Option(&.own LLNode);
+
+fn main() -> void {
+
+	next := NextOpt::None{null};
+	first_node := LLNode.{ val = 1; next = next;};
+	mut hd := move @alloc(first_node);
+	
+	mut k : i32 = 0;
+	while k < 0 {
+		k += 1;
+		new_next := NextOpt::Some{move hd};
+		new_node := LLNode.{val = 1; next = move new_next;};
+		hd = move @alloc(move new_node);
+	}
+	return;
+}
