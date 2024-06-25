@@ -19,11 +19,8 @@ fn main() -> void {
 	});
 
 	// gandalf := Wizard.{ age = 2019; power = 144; }; 
-	
 	person := Character::hob{ move bilbo };
 	// person_2 := Character::wiz { gandalf };
-
-	// gandalf_age := gandalf.age;
 	
 	match person {
 		hob |bilbo| -> {
@@ -33,6 +30,5 @@ fn main() -> void {
 			mut res := gandalf;
 		}
 	}
-
-	// var := 3;
+	return;
 }

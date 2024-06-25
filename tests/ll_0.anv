@@ -5,18 +5,33 @@ fn Option(T: type) -> type {
 	};
 }
 
-LLNode := struct {
-	val : i32;
-	next : Option(&.own LLNode);
-};
-NextOpt := Option(&.own LLNode);
+fn main(argc : i32) -> void {
+	LLNode := struct {
+		val : i32;
+		next : Option(&.own LLNode);
+	};
+	NextOpt := Option(&.own LLNode);
+	next_none := NextOpt::None{null};
+			
+	first_node := LLNode.{ val = 1; next = next_none;};
 
-fn main() -> void {
-	next_none := NextOpt::None{null};		
-	mut hd := move @alloc(LLNode.{ val = 1; next = next_none;});
+	// Allocate the node on the heap.
+	mut hd : &.own LLNode = move @alloc(move first_node);
 
+	// using 'move' will transfer ownership
+	new_hd : &.own LLNode = move hd;
+
+	// not using move just gives a normal reference
+	hd_alias : &LLNode = new_hd;
+
+	@free(move new_hd);
+	// b := 23534 + 21312;
+	// if b < 52312 {
+	// 	@free(move new_hd);
+	// } else {
+	// 	@print(b);
+	// }
 	
-
 	// mut k : i32 = 0;
 	// while k < 0 {
 	// 	k += 1;

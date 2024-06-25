@@ -125,8 +125,8 @@ fn tir_val_to_llvm(tir: *Tir, index: Value.Index) !types.LLVMValueRef {
 
 fn copy_struct(s: *LLVMState, topmost_agg_type: types.LLVMTypeRef, type_ref: Type.IndexRef, src_val: types.LLVMValueRef, dest_val: types.LLVMValueRef, gep_fields: *std.ArrayList(types.LLVMValueRef)) !void {
     switch (type_ref) {
-        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int, .tir_opaque => return error.Unimplemented,
-        .tir_boolean, .tir_i8, .tir_i16, .tir_i32, .tir_i64, .tir_u8, .tir_u16, .tir_u32, .tir_u64 => {
+        .tir_typ, .tir_own, .tir_ref, .tir_stackref, .tir_void, .tir_unknown_int => return error.Unimplemented,
+        .tir_boolean, .tir_i8, .tir_i16, .tir_i32, .tir_i64, .tir_u8, .tir_u16, .tir_u32, .tir_u64, .tir_opaque => {
             const llvm_src_gep = core.LLVMBuildGEP2(s.builder, topmost_agg_type, src_val, gep_fields.items.ptr, @intCast(gep_fields.items.len), "");
             const llvm_load = core.LLVMBuildLoad2(s.builder, try tir_type_to_llvm(s, type_ref), llvm_src_gep, "");
 
@@ -195,14 +195,14 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
     const instructions = s.tir.instructions.slice();
     var inst_index = blk.start;
     while (inst_index <= blk.end) : (inst_index += 1) {
-        print("TIR Index: {}\n", .{inst_index});
+        // print("TIR Index: {}\n", .{inst_index});
         // const inst_index: TirInst.Index = @intCast(inst_index_usize);
         const instruction = s.tir.instructions.get(inst_index);
         const inst_ref: TirInst.IndexRef = @enumFromInt(inst_index);
 
         switch (instruction) {
             .fn_def => |fn_def| {
-                print("Fn def\n", .{});
+                // print("Fn def\n", .{});
                 var llvm_params = std.ArrayList(types.LLVMTypeRef).init(s.tir.allocator);
                 defer llvm_params.deinit();
 
@@ -210,7 +210,7 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
                 var is_comptime = false;
                 for (tir_params) |param_inst_index| {
                     const param_inst = instructions.get(param_inst_index).arg;
-                    print("Param typ ref {}\n", .{param_inst.typ_ref});
+                    // print("Param typ ref {}\n", .{param_inst.typ_ref});
                     if (param_inst.typ_ref == .tir_typ) {
                         is_comptime = true;
                         break;
@@ -220,7 +220,7 @@ pub fn generate_llvm_ir_block(s: *LLVMState, blk_index: TirInst.Index, new_bb: b
                 }
 
                 if (is_comptime) {
-                    print("Skipping comptime function\n", .{});
+                    // print("Skipping comptime function\n", .{});
                     const fn_def_blk = s.tir.instructions.get(fn_def.blk).block;
                     inst_index = @intCast(fn_def_blk.end);
                     llvm_params.deinit();
