@@ -1,6 +1,9 @@
 # Anvil
 A WIP compiler for the anvil language.
 
+The relevant source can be found in the `src` directory.
+
+## Running the compiler
 Requires `zig 0.12` and `llvm 17` to run. 
 
 The debug build may be run with:
@@ -8,7 +11,10 @@ The debug build may be run with:
 zig build run -- -f [anvil_file.anv] && ./link.sh
 ```
 
+A set of test files can be found in the `test` directory. `zig test` can be used to run all of these tests simultaneously. 
 
+
+## Nix Environment
 A `shell.nix` file is provided which will setup the required environment automatically. This requires an installiation of the `nix` package manager, however. The environment may be activated with
 ```
 nix-shell
