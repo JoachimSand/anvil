@@ -8,6 +8,7 @@ in
     buildInputs = [
       libllvm
       libz
+      zig
     ];
     # why do we need to set the library path manually?
     shellHook = ''

@@ -1,6 +1,18 @@
 # Anvil
 A WIP compiler for the anvil language.
 
+Requires `zig 0.12` and `llvm 17` to run. 
+
+The debug build may be run with:
+```
+zig build run -- -f [anvil_file.anv] && ./link.sh
+```
+
+
+A `shell.nix` file is provided which will setup the required environment automatically. This requires an installiation of the `nix` package manager, however. The environment may be activated with
+```
+nix-shell
+```
 
 
 ## Assembling generated LLVM IR
@@ -86,6 +98,7 @@ br_either <op1> then <op2> else <op3>
 
 
 TIR Example:
+```llvm    
 %0 = blk %1 to %19 {
     %1 = constant_type(struct{x : tir_u32, y : tir_u32, });
     %2 = fn def test (%4, %5, ) -> tir_void at blk %3;
@@ -108,8 +121,4 @@ TIR Example:
     %18 = blk %19 to %18 {
     };
 };
-                // const llvm_typ = try tir_type_to_llvm(s, ptr_typ.ptr.deref_type);
-                // const llvm_alloc = core.LLVMBuildMalloc(s.builder, llvm_typ, "");
-                // _ = llvm_typ;
-                _ = ptr_typ;
-                // try s.tir_llvm_val_map.put(inst_ref, llvm_alloc);
+```
