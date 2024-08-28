@@ -103,11 +103,21 @@ pub const AirInst = union(enum) {
         address_of_self,
         _,
 
-        pub fn is_ref(ref: *IndexRef) bool {
-            if (@intFromEnum(ref) < RefStart) {
+        pub fn is_ref(ref: *const IndexRef) bool {
+            if (@intFromEnum(ref.*) < RefStart) {
                 return true;
             } else {
                 return false;
+            }
+        }
+
+        pub fn format(ref: *const IndexRef, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = fmt;
+            _ = options;
+            if (ref.is_ref()) {
+                try std.fmt.format(writer, "%{d}", .{@intFromEnum(ref.*)});
+            } else {
+                try std.fmt.format(writer, "{s}", .{@tagName(ref.*)});
             }
         }
     };
@@ -556,7 +566,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("address of {} with cap {}", .{ ad.target, ad.cap });
             },
             .deref => |deref| {
-                print("deref %{}", .{deref});
+                print("deref {}", .{deref});
             },
             .indexing => |id| {
                 print("indexing {}, {}", .{ id.target, id.index });
@@ -565,39 +575,39 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("zero array with type {}", .{zero});
             },
             .add => |add| {
-                print("add %{}, %{}", .{ add.lhs, add.rhs });
+                print("add {}, {}", .{ add.lhs, add.rhs });
             },
             .lt => |lt| {
-                print("lt %{}, %{}", .{ lt.lhs, lt.rhs });
+                print("lt {}, {}", .{ lt.lhs, lt.rhs });
             },
             // .gt => |gt| {
             //     print("gt(%{} > %{})", .{ gt.lhs, gt.rhs });
             // },
             .type_as => |type_as| {
-                print("type %{} as %{}", .{ type_as.type, type_as.expr });
+                print("type {} as {}", .{ type_as.type, type_as.expr });
             },
             .type_of => |type_of| {
-                print("typeof %{}", .{type_of});
+                print("typeof {}", .{type_of});
             },
             .type_of_deref => |type_of| {
-                print("type_of_deref(%{})", .{type_of});
+                print("type_of_deref({})", .{type_of});
             },
             // .type_of_enum_case => |type_of| {
             //     print("type_of_enum_case(%{}, %{})", .{ type_of.enum_type, type_of.tag });
             // },
             .br => |br| {
-                print("br %{}", .{br});
+                print("br {}", .{br});
             },
             .br_cond => |br| {
-                print("br_cond %{}, %{}", .{ br.cond, br.blk });
+                print("br_cond {}, {}", .{ br.cond, br.blk });
             },
             .br_either => |br_extra| {
                 const br = a.get_extra_struct(AirInst.BrEither, br_extra);
-                print("br_either %{}, (%{} else %{})", .{ br.cond, br.then_blk, br.else_blk });
+                print("br_either {}, ({} else {})", .{ br.cond, br.then_blk, br.else_blk });
             },
 
             .block => |blk| {
-                print("block(%{d}, %{d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
+                print("block({d}, {d}){{\n", .{ @intFromEnum(blk.start), @intFromEnum(blk.end) });
                 try print_air(a, @intFromEnum(blk.start) + 1, @intFromEnum(blk.end), indent + 1);
                 index = @intFromEnum(blk.end) - 1;
 
@@ -618,7 +628,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 while (extra < def.end) {
                     const field_info = a.get_extra_struct(AirInst.DeclInfo, extra);
                     const var_name = a.get_string(field_info.var_name);
-                    print("{s} : %{}, ", .{ var_name, field_info.type_inst });
+                    print("{s} : {}, ", .{ var_name, field_info.type_inst });
 
                     extra += field_count;
                 }
@@ -631,13 +641,13 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("alloca {} ", .{alloc.type});
             },
             .memalloc => |memalloc| {
-                print("memalloc %{} ", .{memalloc.expr});
+                print("memalloc {} ", .{memalloc.expr});
             },
             .memfree => |memfree| {
-                print("memfree %{} ", .{memfree.expr});
+                print("memfree {} ", .{memfree.expr});
             },
             .print => |p| {
-                print("print %{} ", .{p.expr});
+                print("print {} ", .{p.expr});
             },
             .get_element_ptr => |extra_index| {
                 const get_element_ptr = a.get_extra_struct(AirInst.GetElementPtr, extra_index);
@@ -655,14 +665,14 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("update_enum_ptr {}, new_tag {s}, new_contents {}", .{ update_enum.ptr, a.get_string(update_enum.new_tag), update_enum.tag_contents });
             },
             .match => |match| {
-                print("match on %{}, ", .{match.enum_ptr});
+                print("match on {}, ", .{match.enum_ptr});
                 const type_info = @typeInfo(AirInst.MatchCase);
                 const field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
                 var extra = match.cases_start;
                 while (extra < match.cases_end) {
                     const match_case = a.get_extra_struct(AirInst.MatchCase, extra);
                     const tag = a.get_string(match_case.tag);
-                    print("{s} -> %{}, ", .{ tag, match_case.blk });
+                    print("{s} -> {}, ", .{ tag, match_case.blk });
 
                     extra += field_count;
                 }
@@ -673,13 +683,13 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 const args = a.extra.items[fn_call.args_start..fn_call.args_end];
                 for (args) |arg| {
                     const arg_ref: AirInst.IndexRef = @enumFromInt(arg);
-                    print("%{}, ", .{arg_ref});
+                    print("{}, ", .{arg_ref});
                 }
                 print(")", .{});
             },
             .enum_project => |project| {
                 const tag = a.get_string(project.tag);
-                print("project %{} to {s}", .{ project.enum_ptr, tag });
+                print("project {} to {s}", .{ project.enum_ptr, tag });
             },
             .ret => |expr| {
                 print("ret {}", .{expr});
@@ -688,7 +698,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 print("ret_empty ", .{});
             },
             .load => |load| {
-                print("load(%{} with cap {})", .{ load.ptr, load.cap });
+                print("load({} with cap {})", .{ load.ptr, load.cap });
             },
             .store => |store| {
                 print("store({}, {})", .{ store.val, store.ptr });

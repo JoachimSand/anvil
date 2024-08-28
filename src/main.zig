@@ -18,11 +18,7 @@ const safety_mod = @import("safety.zig");
 const llvm_gen = @import("llvm_gen.zig");
 
 pub fn main() !void {
-
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    // print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // print("Size of node: {any}\n", .{@sizeOf(Node)});
+    print("Size of node: {any}\n", .{@sizeOf(Node)});
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -71,11 +67,11 @@ pub fn main() !void {
     // We can now free the parser contents: tokens, nodes etc.
     parser.deinit();
 
-    var tir = try tir_mod.tir_gen(&air, air.allocator);
-    defer tir.deinit();
-    _ = try safety_mod.check_safety(&tir);
+    // var tir = try tir_mod.tir_gen(&air, air.allocator);
+    // defer tir.deinit();
+    // _ = try safety_mod.check_safety(&tir);
 
-    try llvm_gen.generate_llvm_ir(&tir);
+    // try llvm_gen.generate_llvm_ir(&tir);
 }
 
 fn test_compiler(file_name: []const u8) !void {
