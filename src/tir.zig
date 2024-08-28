@@ -33,7 +33,43 @@ const AirInst = air_mod.AirInst;
 pub const Type = union(enum) {
     pub const Index = u32;
     const RefStart = 4294967040;
-    pub const IndexRef = enum(Index) { tir_boolean = RefStart, tir_unknown_int, tir_u64, tir_u32, tir_u16, tir_u8, tir_i64, tir_i32, tir_i16, tir_i8, tir_void, tir_typ, tir_own, tir_ref, tir_stackref, tir_opaque, _ };
+    pub const IndexRef = enum(Index) {
+        tir_boolean = RefStart,
+        tir_unknown_int,
+        tir_u64,
+        tir_u32,
+        tir_u16,
+        tir_u8,
+        tir_i64,
+        tir_i32,
+        tir_i16,
+        tir_i8,
+        tir_void,
+        tir_typ,
+        tir_own,
+        tir_ref,
+        tir_stackref,
+        tir_opaque,
+        _,
+
+        pub fn is_ref(ref: *const Type.IndexRef) bool {
+            if (@intFromEnum(ref.*) < Type.RefStart) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        pub fn format(ref: *const IndexRef, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = fmt;
+            _ = options;
+            if (ref.is_ref()) {
+                try std.fmt.format(writer, "%type_ref.{d}", .{@intFromEnum(ref.*)});
+            } else {
+                try std.fmt.format(writer, "{s}", .{@tagName(ref.*)});
+            }
+        }
+    };
 
     const List = std.MultiArrayList(Type);
     const Field = struct { var_name: Air.StringIndex, field_type: Type.IndexRef };
@@ -57,14 +93,6 @@ pub const Type = union(enum) {
     },
 };
 
-pub fn type_is_ref(a: Type.IndexRef) bool {
-    if (@intFromEnum(a) < Type.RefStart) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
 // allow_cap_coercion: If set to true, if a has an ownership ptr type and b has a ref ptr type,
 // accept equality
 fn type_ref_eq(s: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coercion: bool) bool {
@@ -74,7 +102,7 @@ fn type_ref_eq(s: *TirState, a: Type.IndexRef, b: Type.IndexRef, allow_cap_coerc
         if (a == .tir_opaque or b == .tir_opaque) {
             return true;
         }
-        if (type_is_ref(a) and type_is_ref(b)) {
+        if (a.is_ref() and b.is_ref()) {
             const a_type = s.tir.types.get(@intFromEnum(a));
             const b_type = s.tir.types.get(@intFromEnum(b));
 
@@ -110,7 +138,7 @@ fn type_ref_eq_stackref_coerce(s: *TirState, a: Type.IndexRef, b: Type.IndexRef)
         if (a == .tir_opaque or b == .tir_opaque) {
             return true;
         }
-        if (type_is_ref(a) and type_is_ref(b)) {
+        if (a.is_ref() and b.is_ref()) {
             const a_type = s.tir.types.get(@intFromEnum(a));
             // const b_type = t.tir.types.get(@intFromEnum(b));
 
@@ -175,6 +203,16 @@ pub const TirInst = union(enum) {
                 return true;
             } else {
                 return false;
+            }
+        }
+
+        pub fn format(ref: *const IndexRef, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = fmt;
+            _ = options;
+            if (ref.is_ref()) {
+                try std.fmt.format(writer, "%{d}", .{@intFromEnum(ref.*)});
+            } else {
+                try std.fmt.format(writer, "inst_ref.{s}", .{@tagName(ref.*)});
             }
         }
     };
@@ -1207,7 +1245,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     const blk = s.tir.instructions.get(blk_index).block;
                     const ret_inst = s.tir.instructions.get(blk.end).ret;
                     try s.air_tir_type_map.put(@enumFromInt(air_index), ret_inst.val);
-                    // if (type_is_ref(ret_inst.val)) {
+                    // if (ret_inst.is_ref().val)) {
                     //     // const air_fn_def_blk = s.air.instructions.get(fn_def_air.blk).block;
                     //     // const air_ret_inst: AirInst.Index = @intFromEnum(air_fn_def_blk.end) - 1;
                     //     // print("Air ret inst: {}\n", .{air_ret_inst});
@@ -1216,7 +1254,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     // } else {
                     //     return error.Unimplemented;
                     // }
-                    // if (type_is_ref(ret_inst.val)) {
+                    // if (ret_inst.is_ref().val)) {
                     //     const ret_val_inst = s.tir.instructions.get(@intFromEnum(ret_inst.val));
                     //     try s.air_tir_type_map.put(@enumFromInt(air_param_indeces[extra]), ret_val_inst.constant_type);
                     // } else {
@@ -1841,7 +1879,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             .deref => |air_deref| {
                 const tir_deref_target = try s.get_inst_mapping(air_deref);
                 const target_type_ref = try get_tir_inst_ret_type(s, tir_deref_target);
-                if (type_is_ref(target_type_ref) == false) {
+                if (target_type_ref.is_ref() == false) {
                     return error.DerefOnPrimitive;
                 } else {
                     const target_type = s.tir.types.get(@intFromEnum(target_type_ref));
@@ -1957,7 +1995,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     return error.StoringWrongType;
                 }
 
-                // if (type_is_ref(tir_val_type_ref)) {
+                // if (tir_val_type_ref.is_ref()) {
                 //     const tir_val_type = s.tir.types.get(@intFromEnum(tir_val_type_ref));
                 //     if (tir_val_type == .ptr and tir_val_type.ptr.cap == .tir_own) {
                 //         // Ensure that the value instruction is a move when reassign owning pointers.
@@ -1974,7 +2012,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 //             }
                 //         }
 
-                //         // if (type_is_ref(tir_pointed_to_type)) {
+                //         // if (tir_pointed_to_type.is_ref()) {
                 //         //     const tir_ptr_deref_type = s.tir.types.get(@intFromEnum(tir_pointed_to_type));
                 //         //     if (tir_ptr_deref_type == .ptr and tir_ptr)
                 //         // }
