@@ -111,8 +111,8 @@ fn test_compiler(file_name: []const u8) !void {
     // We can now free the parser contents: tokens, nodes etc.
     parser.deinit();
 
-    var tir = try tir_mod.tir_gen(&air, air.allocator);
-    defer tir.deinit();
+    // var tir = try tir_mod.tir_gen(&air, air.allocator);
+    // defer tir.deinit();
     // print("Root node {any}\n", .{parser.nodes.items[root_id]});
     // // stdout is for the actual output of your application, for example if you
     // // are implementing gzip, then only the compressed bytes should be sent to

@@ -584,7 +584,7 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             //     print("gt(%{} > %{})", .{ gt.lhs, gt.rhs });
             // },
             .type_as => |type_as| {
-                print("type {} as {}", .{ type_as.type, type_as.expr });
+                print("type {} as {}", .{ type_as.expr, type_as.type });
             },
             .type_of => |type_of| {
                 print("typeof {}", .{type_of});
@@ -1175,7 +1175,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
             .assignment => |assign| {
                 const target_node = s.ast.nodes.items[assign.target];
                 var old_val_inst: AirInst = undefined;
-                var target_type_inst: AirInst.IndexRef = undefined;
+                // var target_type_inst: AirInst.IndexRef = undefined;
                 var target_ptr_inst: AirInst.IndexRef = undefined;
                 switch (target_node) {
                     .identifier => |id| {
@@ -1184,7 +1184,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                         if (target_info.mutable == false) {
                             return error.AssignToImm;
                         }
-                        target_type_inst = target_info.type_inst;
+                        // target_type_inst = target_info.type_inst;
                         target_ptr_inst = target_info.inst;
                         old_val_inst = .{ .load = .{ .ptr = target_info.inst, .cap = .own } };
                     },
@@ -1213,7 +1213,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                         target_ptr_inst = get_elem_inst;
 
                         old_val_inst = .{ .load = .{ .ptr = get_elem_inst, .cap = .own } };
-                        target_type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
+                        // target_type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
                         // target_type_inst = target_info.type_inst;
                     },
 
@@ -1232,9 +1232,10 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 }
                 // const expr_node = s.ast.nodes.items[assign.expr];
                 if (expr_owns_memory(s, expr_inst) == false) {
-                    const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = target_type_inst, .expr = expr_inst } });
+                    // const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = target_type_inst, .expr = expr_inst } });
+                    // _ = try s.append_inst(.{ .store = .{ .val = type_as_inst, .ptr = target_ptr_inst } });
 
-                    _ = try s.append_inst(.{ .store = .{ .val = type_as_inst, .ptr = target_ptr_inst } });
+                    _ = try s.append_inst(.{ .store = .{ .val = expr_inst, .ptr = target_ptr_inst } });
                 }
 
                 // target_info.inst = type_as_inst;
