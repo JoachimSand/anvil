@@ -1,5 +1,10 @@
-
-LLNode := struct {
-	val : u32;
-	next : &.own LLNode;
+BinNode := struct {
+	a : u32;
+	b : u32;
 };
+
+fn test() -> void {
+	mut node := BinNode.{a = 93; b = 94; };
+	node2 := BinNode.{a = 98; b = 99; };
+	node = node2;
+}

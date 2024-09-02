@@ -106,35 +106,32 @@ pub const Value = union(enum) {
     },
 };
 
-// allow_cap_coercion: If set to true, if a has an ownership ptr type and b has a ref ptr type,
+// own_coerce: If set to true, if a has an ownership ptr type and b has a ref ptr type,
 // accept equality
-fn type_ref_eq(s: *TirState, a: Value.IndexRef, b: Value.IndexRef, allow_cap_coercion: bool) bool {
+fn type_ref_eq(s: *TirState, a: Value.IndexRef, b: Value.IndexRef, own_coerce: bool) bool {
     if (a == b) {
         return true;
     } else {
-        if (a == .opaque_typ or b == .opaque_typ) {
-            return true;
-        }
+        // if (a == .opaque_typ or b == .opaque_typ) {
+        //     return true;
+        // }
         if (a.is_ref() and b.is_ref()) {
             const a_type = s.tir.values.get(@intFromEnum(a));
             const b_type = s.tir.values.get(@intFromEnum(b));
 
             if (a_type == .ptr_typ and b_type == .ptr_typ) {
-                if (a_type.ptr_typ.deref_type == .opaque_typ or b_type.ptr_typ.deref_type == .opaque_typ) {
-                    return true;
+                // if (a_type.ptr_typ.deref_type == .opaque_typ or b_type.ptr_typ.deref_type == .opaque_typ) {
+                //     return true;
+                // }
+                if ((a_type.ptr_typ.deref_type == b_type.ptr_typ.deref_type) or (own_coerce and a_type.ptr_typ.cap == .own_typ and b_type.ptr_typ.cap == .ref_typ)) {
+                    return type_ref_eq(s, a, b, own_coerce);
+                } else {
+                    return false;
                 }
-                if (a_type.ptr_typ.deref_type == b_type.ptr_typ.deref_type) {
-                    if (a_type.ptr_typ.cap == b_type.ptr_typ.cap) {
-                        return true;
-                    } else if (allow_cap_coercion and a_type.ptr_typ.cap == .own_typ and b_type.ptr_typ.cap == .ref_typ) {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                }
-            } else if (a_type == .enum_typ and b_type == .enum_typ) {
-                return true;
             }
+            // else if (a_type == .enum_typ and b_type == .enum_typ) {
+            //     return true;
+            // }
         }
         print("Types are not equal: \n", .{});
         print_type(&s.tir, a) catch unreachable;
@@ -144,6 +141,7 @@ fn type_ref_eq(s: *TirState, a: Value.IndexRef, b: Value.IndexRef, allow_cap_coe
         return false;
     }
 }
+
 fn type_ref_eq_stackref_coerce(s: *TirState, a: Value.IndexRef, b: Value.IndexRef) bool {
     if (a == b) {
         return true;
@@ -429,7 +427,7 @@ const TirState = struct {
 
     // State needed during generation of TIR from AIR.
     air_tir_inst_map: AirTirInstMap,
-    air_tir_type_map: AirTirValMap,
+    air_tir_val_map: AirTirValMap,
     fn_def_map: FnDefMap,
     scratch: std.ArrayList(u32),
 
@@ -465,8 +463,8 @@ const TirState = struct {
         return tir_ref;
     }
 
-    fn get_type_mapping(t: *TirState, air_index: AirInst.IndexRef) !Value.IndexRef {
-        const tir_ref: Value.IndexRef = t.air_tir_type_map.get(air_index) orelse {
+    fn get_val_mapping(t: *TirState, air_index: AirInst.IndexRef) !Value.IndexRef {
+        const tir_ref: Value.IndexRef = t.air_tir_val_map.get(air_index) orelse {
             print("Missing instruction mapping for {}\n", .{air_index});
             return error.MissingMapping;
         };
@@ -485,8 +483,8 @@ const TirState = struct {
         try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_index);
     }
 
-    fn set_type_mapping(t: *TirState, air_index: AirInst.Index, tir_type: Value.IndexRef) !void {
-        try t.air_tir_type_map.put(@enumFromInt(air_index), tir_type);
+    fn set_val_mapping(t: *TirState, air_index: AirInst.Index, tir_type: Value.IndexRef) !void {
+        try t.air_tir_val_map.put(@enumFromInt(air_index), tir_type);
     }
 
     fn append_constant_val(t: *TirState, val: Value, air_index: AirInst.Index) !void {
@@ -507,7 +505,7 @@ const TirState = struct {
         t.scratch.deinit();
 
         t.air_tir_inst_map.deinit();
-        t.air_tir_type_map.deinit();
+        t.air_tir_val_map.deinit();
         t.fn_def_map.deinit();
     }
 };
@@ -1105,12 +1103,7 @@ fn get_tir_inst_ret_type(s: *TirState, inst_ref: TirInst.IndexRef) !Value.IndexR
                 .move => |move| {
                     const val_type = try get_tir_inst_ret_type(s, @enumFromInt(move));
                     return val_type;
-                    // const type_index = try t.append_type(Type{ .ptr_typ = val_type });
-                    // return @enumFromInt(type_index);
                 },
-                // .cap_reduce => |cap_reduce| {
-                //     return cap_reduce.ret_type;
-                // },
                 .add_i8 => return .i8_typ,
                 .add_i16 => return .i16_typ,
                 .add_i32 => return .i32_typ,
@@ -1120,10 +1113,6 @@ fn get_tir_inst_ret_type(s: *TirState, inst_ref: TirInst.IndexRef) !Value.IndexR
                 .add_u32 => return .u32_typ,
                 .add_u64 => return .u64_typ,
                 .arg => |arg| return arg.typ_ref,
-                // .add_i8 => tir.air_tir_map.put(@intFromEnum(air_index), .i8_typ),
-                // .add_i8 => tir.air_tir_map.put(@intFromEnum(air_index), .i8_typ),
-                // .add_i8 => tir.air_tir_map.put(@intFromEnum(air_index), .i8_typ),
-                // else => return error.Unimplemented,
             }
         },
     }
@@ -1240,7 +1229,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             .fn_def => |fn_def_extra| {
                 // print("ADDING FN DEF\n", .{});
                 const fn_def = s.air.get_extra_struct(AirInst.FnDef, fn_def_extra);
-                const tir_ret_type = try s.get_type_mapping(fn_def.ret_type);
+                const tir_ret_type = try s.get_val_mapping(fn_def.ret_type);
 
                 const fn_def_inst_index = try s.append_inst(TirInst{ .fn_def = .{ .name = fn_def.name, .params = undefined, .ret_type = tir_ret_type, .blk = 0 } });
                 try s.air_tir_inst_map.put(air_ref, fn_def_inst_index);
@@ -1295,16 +1284,16 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     while (fn_def_index < fn_def_end) : (fn_def_index += 1) {
                         // print("Removing mappin for {}\n", .{fn_def_index});
                         _ = s.air_tir_inst_map.remove(@enumFromInt(fn_def_index));
-                        _ = s.air_tir_type_map.remove(@enumFromInt(fn_def_index));
+                        _ = s.air_tir_val_map.remove(@enumFromInt(fn_def_index));
                     }
 
                     // Rebind args to comptime-values
                     while (extra < arg_indeces.len) : (extra += 1) {
                         const a_index = arg_indeces[extra];
 
-                        const arg = try s.get_type_mapping(@enumFromInt(a_index));
+                        const arg = try s.get_val_mapping(@enumFromInt(a_index));
                         // print("Remapping {} to {}\n", .{ air_param_indeces[extra], arg });
-                        try s.air_tir_type_map.put(@enumFromInt(air_param_indeces[extra]), arg);
+                        try s.air_tir_val_map.put(@enumFromInt(air_param_indeces[extra]), arg);
                     }
 
                     _ = s.air_tir_inst_map.remove(@enumFromInt(fn_def_air.blk));
@@ -1315,7 +1304,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     // print("blk index {}\n", .{blk_index});
                     const blk = s.tir.instructions.get(blk_index).block;
                     const ret_inst = s.tir.instructions.get(blk.end).ret;
-                    try s.air_tir_type_map.put(air_ref, ret_inst.val);
+                    try s.air_tir_val_map.put(air_ref, ret_inst.val);
                     // if (ret_inst.is_ref().val)) {
                     //     // const air_fn_def_blk = s.air.instructions.get(fn_def_air.blk).block;
                     //     // const air_ret_inst: AirInst.Index = @intFromEnum(air_fn_def_blk.end) - 1;
@@ -1338,7 +1327,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             .struct_def, .enum_def => |air_container_def| {
                 const type_info = @typeInfo(AirInst.DeclInfo);
                 const tir_container_type_index = try s.append_val_ref(undefined);
-                try s.air_tir_type_map.put(air_ref, tir_container_type_index);
+                try s.air_tir_val_map.put(air_ref, tir_container_type_index);
 
                 const decl_info_field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
                 var extra = air_container_def.start;
@@ -1346,7 +1335,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 while (extra < air_container_def.end) {
                     const field_info = s.air.get_extra_struct(AirInst.DeclInfo, extra);
 
-                    const tir_field_type = try s.get_type_mapping(field_info.type_inst);
+                    const tir_field_type = try s.get_val_mapping(field_info.type_inst);
                     // orelse {
                     // // mapping might be missing for recursive data structures
                     // if (field_info.type_inst.is_ref()){
@@ -1438,7 +1427,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                             if (contents_type != .ptr_typ) {
                                 unreachable;
                             }
-                            if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false and type_ref_eq_stackref_coerce(s, contents_type_ref, tag_field_type) == false) {
+                            if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false) {
                                 return error.MismatchedEnumFieldType;
                             }
 
@@ -1578,7 +1567,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             },
             .ret => |ret| {
                 // const tir_ret_val = try s.get_inst_mapping(ret);
-                const tir_ret_val = try s.get_type_mapping(ret);
+                const tir_ret_val = try s.get_val_mapping(ret);
                 const tir_ret_inst = try s.append_inst(TirInst{ .ret = .{ .val = tir_ret_val, .ret_type = .typ_typ } });
                 try s.air_tir_inst_map.put(air_ref, tir_ret_inst);
                 return @intFromEnum(tir_ret_inst);
@@ -1612,39 +1601,6 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     return @intFromEnum(tir_br_index);
                 }
             },
-            // .br_either => |br_either| {
-            //     const br = t.air.get_extra_struct(AirInst.BrEither, br_either);
-            //     const tir_cond = try t.get_inst_mapping(br.cond);
-            //     const tir_cond_val = try get_val(t, tir_cond);
-
-            //     const then_blk = t.air.instructions.get(@intFromEnum(br.then_blk));
-            //     const else_blk = t.air.instructions.get(@intFromEnum(br.else_blk));
-            //     if (tir_cond_val) |val| {
-            //         switch (val) {
-            //             .boolean => |boolean| {
-            //                 if (boolean) {
-            //                     try tir_gen_instructions(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
-            //                 }
-            //                 const else_end: u32 = @intFromEnum(else_blk.block.end);
-            //                 air_index = else_end;
-            //             },
-            //             else => return error.ExpectedBoolean,
-            //         }
-            //     } else {
-
-            //         // Compile-time evaluation not possible.
-            //         const cond_typ = try get_tir_inst_ret_type(t, tir_cond);
-            //         if (cond_typ != .boolean_typ) {
-            //             return error.ExpectedBoolean;
-            //         }
-            //         var tir_br_inst = TirInst{ .br = .{ .cond = @intFromEnum(tir_cond), .then_blk = undefined, .else_blk = undefined } };
-            //         const inst_index = try t.append_inst(tir_br_inst);
-
-            //         tir_br_inst.br.then_blk = try tir_gen_blk(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
-            //         tir_br_inst.br.else_blk = try tir_gen_blk(t, @intFromEnum(then_blk.block.start), @intFromEnum(then_blk.block.end));
-            //         t.instructions.set(@intFromEnum(inst_index), tir_br_inst);
-            //     }
-            // },
             .br_either => |br_either| {
                 const br = s.air.get_extra_struct(AirInst.BrEither, br_either);
                 const tir_cond = try s.get_inst_mapping(br.cond);
@@ -1704,25 +1660,28 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
 
                         if (c_l_val == .unknown_int_val and c_r_val == .unknown_int_val) {
                             try s.append_constant_val(Value{ .boolean_val = c_l_val.unknown_int_val < c_r_val.unknown_int_val }, air_index);
-                        } else if (c_l_val == .i8_val and c_r_val == .i8_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.i8_val < c_r_val.i8_val }, air_index);
-                        } else if (c_l_val == .i16_val and c_r_val == .i16_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.i16_val < c_r_val.i16_val }, air_index);
-                        } else if (c_l_val == .i32_val and c_r_val == .i32_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.i32_val < c_r_val.i32_val }, air_index);
-                        } else if (c_l_val == .i64_val and c_r_val == .i64_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.i64_val < c_r_val.i64_val }, air_index);
-                        } else if (c_l_val == .u8_val and c_r_val == .u8_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.u8_val < c_r_val.u8_val }, air_index);
-                        } else if (c_l_val == .u16_val and c_r_val == .u16_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.u16_val < c_r_val.u16_val }, air_index);
-                        } else if (c_l_val == .u32_val and c_r_val == .u32_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.u32_val < c_r_val.u32_val }, air_index);
-                        } else if (c_l_val == .u64_val and c_r_val == .u64_val) {
-                            try s.append_constant_val(Value{ .boolean_val = c_l_val.u64_val < c_r_val.u64_val }, air_index);
                         } else {
                             return error.Unimplemented;
                         }
+                        // else if (c_l_val == .i8_val and c_r_val == .i8_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.i8_val < c_r_val.i8_val }, air_index);
+                        // } else if (c_l_val == .i16_val and c_r_val == .i16_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.i16_val < c_r_val.i16_val }, air_index);
+                        // } else if (c_l_val == .i32_val and c_r_val == .i32_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.i32_val < c_r_val.i32_val }, air_index);
+                        // } else if (c_l_val == .i64_val and c_r_val == .i64_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.i64_val < c_r_val.i64_val }, air_index);
+                        // } else if (c_l_val == .u8_val and c_r_val == .u8_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.u8_val < c_r_val.u8_val }, air_index);
+                        // } else if (c_l_val == .u16_val and c_r_val == .u16_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.u16_val < c_r_val.u16_val }, air_index);
+                        // } else if (c_l_val == .u32_val and c_r_val == .u32_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.u32_val < c_r_val.u32_val }, air_index);
+                        // } else if (c_l_val == .u64_val and c_r_val == .u64_val) {
+                        //     try s.append_constant_val(Value{ .boolean_val = c_l_val.u64_val < c_r_val.u64_val }, air_index);
+                        // } else {
+                        //     return error.Unimplemented;
+                        // }
                         continue;
                     }
                 }
@@ -1769,6 +1728,8 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             },
 
             .add => |air_add| {
+                // TODO: Consider storing most comptime results in the value list by default, only emitting constant instructions
+                // when the results are needed for a non-comptime result.
                 var lhs_tir_ref: TirInst.IndexRef = s.air_tir_inst_map.get(air_add.lhs) orelse return error.MissingMapping;
                 const lhs_val = try get_val(s, lhs_tir_ref);
                 var rhs_tir_ref: TirInst.IndexRef = s.air_tir_inst_map.get(air_add.rhs) orelse return error.MissingMapping;
@@ -1833,41 +1794,41 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 try s.air_tir_inst_map.put(air_ref, res_inst);
             },
             .type_of, .type_of_deref => |air_type_inst| {
-                const maybe_mapped_type: ?Value.IndexRef = s.get_type_mapping(air_type_inst) catch null;
+                const maybe_mapped_type: ?Value.IndexRef = s.get_val_mapping(air_type_inst) catch null;
                 if (maybe_mapped_type) |_| {
-                    try s.air_tir_type_map.put(air_ref, .typ_typ);
+                    try s.air_tir_val_map.put(air_ref, .typ_typ);
                 } else {
                     const tir_expr_inst = try s.get_inst_mapping(air_type_inst);
                     const tir_expr_type = try get_tir_inst_ret_type(s, tir_expr_inst);
 
                     if (air_inst == .type_of) {
-                        try s.air_tir_type_map.put(air_ref, tir_expr_type);
+                        try s.air_tir_val_map.put(air_ref, tir_expr_type);
                     } else {
                         const ptr_type = s.tir.values.get(@intFromEnum(tir_expr_type)).ptr_typ.deref_type;
-                        try s.air_tir_type_map.put(air_ref, ptr_type);
+                        try s.air_tir_val_map.put(air_ref, ptr_type);
                     }
                 }
             },
             .type_as => |type_as| {
-                const tir_type_ref = try s.get_type_mapping(type_as.type);
+                const tir_type_ref = try s.get_val_mapping(type_as.type);
 
                 // An expression might evaluate to a type
                 // print("Expr is {}\n", .{type_as.expr});
-                const maybe_expr_type = s.get_type_mapping(type_as.expr) catch null;
+                const maybe_expr_type = s.get_val_mapping(type_as.expr) catch null;
                 // print("Type mapping {any}\n", .{maybe_expr_type});
                 if (maybe_expr_type) |expr_type| {
                     // print("Made it here\n", .{});
                     switch (expr_type) {
                         .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ, .void_typ, .own_typ, .ref_typ, .stackref_typ, .opaque_typ => {
                             if (tir_type_ref == .typ_typ) {
-                                try s.air_tir_type_map.put(air_ref, expr_type);
+                                try s.air_tir_val_map.put(air_ref, expr_type);
                                 continue;
                             }
                         },
                         .typ_typ => return error.TypeOfType,
                         _ => {
                             if (tir_type_ref == .typ_typ) {
-                                try s.air_tir_type_map.put(air_ref, expr_type);
+                                try s.air_tir_val_map.put(air_ref, expr_type);
                                 const expr_type_inst = try s.append_inst(.{ .constant_type = expr_type });
                                 try s.air_tir_inst_map.put(air_ref, expr_type_inst);
                                 continue;
@@ -1901,7 +1862,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                             }
                         },
                         .typ_typ => {
-                            try s.air_tir_type_map.put(air_ref, tir_type_ref);
+                            try s.air_tir_val_map.put(air_ref, tir_type_ref);
                         },
                         else => {
                             // print("Val : {}\n", .{val});
@@ -1918,33 +1879,13 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
 
                     if (type_ref_eq(s, expr_type_ref, tir_type_ref, false)) {
                         try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
-                    } else if (type_ref_eq_stackref_coerce(s, expr_type_ref, tir_type_ref)) {
-                        try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
-                    } else if (type_ref_eq_stackref_coerce(s, tir_type_ref, expr_type_ref)) {
-                        try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
+                        // } else if (type_ref_eq_stackref_coerce(s, expr_type_ref, tir_type_ref)) {
+                        //     try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
+                        // } else if (type_ref_eq_stackref_coerce(s, tir_type_ref, expr_type_ref)) {
+                        //     try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
                     } else {
                         return error.MismatchedTypes;
                     }
-                    // } else if (type_ref_eq(s, expr_type_ref, tir_type_ref, true)) {
-                    //     // Expression type is own pointer, type as wants ref pointer.
-                    //     // Emit cap. reduce instruction
-                    //     const expr_type = s.tir.types.get(@intFromEnum(expr_type_ref));
-                    //     const reduced_cap_type = try s.append_type(.{ .ptr_typ = .{ .deref_type = expr_type.ptr.deref_type, .cap = .ref_typ } });
-                    //     const cap_reduce_inst = try s.append_inst(TirInst{ .cap_reduce = .{ .expr = @intFromEnum(tir_expr_ref), .ret_type = reduced_cap_type } });
-                    //     try s.air_tir_inst_map.put(air_ref, cap_reduce_inst);
-                    //     // try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
-                    // } else if (type_ref_eq_stackref_coerce(s, expr_type_ref, tir_type_ref)) {
-                    //     // return error.Unimplemented;
-                    //     try s.air_tir_inst_map.put(air_ref, tir_expr_ref);
-                    // } else {
-                    //     // print("{}\n", .{expr_inst});
-                    //     print("Type coercion not possible: \n", .{});
-                    //     print_type(s, expr_type_ref) catch unreachable;
-                    //     print(" from {}\n", .{tir_expr_ref});
-                    //     print_type(s, tir_type_ref) catch unreachable;
-                    //     print("\n", .{});
-                    //     return error.MismatchedTypes;
-                    // }
                 }
             },
             .deref => |air_deref| {
@@ -1963,7 +1904,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 }
             },
             .alloca => |air_alloc| {
-                const tir_alloc_type = try s.get_type_mapping(air_alloc.type);
+                const tir_alloc_type = try s.get_val_mapping(air_alloc.type);
                 const ret_type_index = try s.append_val_ref(Value{ .ptr_typ = .{ .deref_type = tir_alloc_type, .cap = .stackref_typ } });
 
                 const tir_alloca = try s.append_inst(.{ .alloca = .{ .alloc_type = tir_alloc_type, .ret_type = ret_type_index } });
@@ -2007,14 +1948,14 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 const tir_target_type = if (air_address_of.target == .address_of_self)
                     .opaque_typ
                 else
-                    try s.get_type_mapping(air_address_of.target);
+                    try s.get_val_mapping(air_address_of.target);
 
-                const tir_cap_type = try s.get_type_mapping(air_address_of.cap);
+                const tir_cap_type = try s.get_val_mapping(air_address_of.cap);
                 const tir_address_type = try s.append_val_ref(Value{ .ptr_typ = .{ .deref_type = tir_target_type, .cap = tir_cap_type } });
-                try s.air_tir_type_map.put(air_ref, tir_address_type);
+                try s.air_tir_val_map.put(air_ref, tir_address_type);
             },
             .zero_array => |air_zero_array| {
-                const tir_array_type = try s.get_type_mapping(air_zero_array);
+                const tir_array_type = try s.get_val_mapping(air_zero_array);
                 const tir_array = try s.append_inst(.{ .zero_array = tir_array_type });
                 try s.air_tir_inst_map.put(air_ref, tir_array);
             },
@@ -2061,33 +2002,13 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
 
                 const tir_pointed_to_type = s.tir.values.get(@intFromEnum(tir_ptr_type)).ptr_typ.deref_type;
 
-                if (type_ref_eq(s, tir_val_type_ref, tir_pointed_to_type, false) == false and type_ref_eq_stackref_coerce(s, tir_val_type_ref, tir_pointed_to_type) == false) {
+                if (type_ref_eq(s, tir_val_type_ref, tir_pointed_to_type, false) == false) {
                     print("{} {}\n", .{ tir_val_inst, tir_ptr_inst });
                     return error.StoringWrongType;
                 }
-
-                // if (tir_val_type_ref.is_ref()) {
-                //     const tir_val_type = s.tir.types.get(@intFromEnum(tir_val_type_ref));
-                //     if (tir_val_type == .ptr_typ and tir_val_type.ptr.cap == .own_typ) {
-                //         // Ensure that the value instruction is a move when reassign owning pointers.
-                //         const move_inst = s.tir.instructions.get(@intFromEnum(tir_val_inst));
-                //         if (move_inst != .move) {
-                //             print("{}\n", .{move_inst});
-                //             return error.StoringOwnTypeWithoutMove;
-                //         } else {
-                //             // Ensure that the target is an owning type.
-                //             // TODO: This may be need to be more complicated.
-                //             if (type_ref_eq(s, tir_val_type_ref, tir_pointed_to_type, false) == false) {
-                //                 print("{} COMPARED WITH {}\n", .{ tir_val_inst, tir_ptr_inst });
-                //                 return error.StoringWrongType;
-                //             }
-                //         }
-
-                //         // if (tir_pointed_to_type.is_ref()) {
-                //         //     const tir_ptr_deref_type = s.tir.types.get(@intFromEnum(tir_pointed_to_type));
-                //         //     if (tir_ptr_deref_type == .ptr_typ and tir_ptr)
-                //         // }
-                //     }
+                // if (type_ref_eq(s, tir_val_type_ref, tir_pointed_to_type, false) == false and type_ref_eq_stackref_coerce(s, tir_val_type_ref, tir_pointed_to_type) == false) {
+                //     print("{} {}\n", .{ tir_val_inst, tir_ptr_inst });
+                //     return error.StoringWrongType;
                 // }
 
                 const tir_store = try s.append_inst(TirInst{ .store = .{ .val = tir_val_inst, .val_type = tir_val_type_ref, .ptr = tir_ptr_inst } });
@@ -2099,15 +2020,15 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 try s.air_tir_inst_map.put(air_ref, tir_move);
             },
             .arg => |air_arg| {
-                const tir_type_ref = try s.get_type_mapping(air_arg.type);
+                const tir_type_ref = try s.get_val_mapping(air_arg.type);
                 const tir_arg = TirInst{ .arg = .{ .name = air_arg.name, .typ_ref = tir_type_ref } };
                 const inst_index = try s.append_inst(tir_arg);
                 if (tir_type_ref == .typ_typ) {
-                    if (s.air_tir_type_map.get(air_ref)) |arg_type| {
+                    if (s.air_tir_val_map.get(air_ref)) |arg_type| {
                         // print("AT AIR ARG {} ADDING ARG TYPE MAP TO {}\n", .{ air_index, arg_type });
-                        try s.air_tir_type_map.put(air_ref, arg_type);
+                        try s.air_tir_val_map.put(air_ref, arg_type);
                     } else {
-                        try s.air_tir_type_map.put(air_ref, .typ_typ);
+                        try s.air_tir_val_map.put(air_ref, .typ_typ);
                     }
                     // const arg_type = try s.get_type_mapping(air_ref);
                 }
@@ -2115,7 +2036,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             },
             .indexing => |indexing| {
                 const tir_target_inst: ?TirInst.IndexRef = s.get_inst_mapping(indexing.target) catch null;
-                const tir_target_type: ?Value.IndexRef = s.get_type_mapping(indexing.target) catch null;
+                const tir_target_type: ?Value.IndexRef = s.get_val_mapping(indexing.target) catch null;
 
                 if (tir_target_inst) |inst| {
                     // We are indexing into a value
@@ -2157,7 +2078,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                         const type_index = try s.append_val_ref(array_type);
                         const type_inst = try s.append_inst(.{ .constant_type = type_index });
                         try s.air_tir_inst_map.put(air_ref, type_inst);
-                        try s.air_tir_type_map.put(air_ref, type_index);
+                        try s.air_tir_val_map.put(air_ref, type_index);
                     } else {
                         return error.ArrayTypeMustHaveKnownSize;
                     }
@@ -2188,7 +2109,7 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !Tir {
         },
         .air = air,
         .air_tir_inst_map = TirState.AirTirInstMap.init(allocator),
-        .air_tir_type_map = TirState.AirTirValMap.init(allocator),
+        .air_tir_val_map = TirState.AirTirValMap.init(allocator),
         .fn_def_map = TirState.FnDefMap.init(allocator),
     };
     defer s.deinit();
@@ -2196,19 +2117,19 @@ pub fn tir_gen(air: *Air, allocator: Allocator) !Tir {
     try s.air_tir_inst_map.put(AirInst.IndexRef.false_lit, TirInst.IndexRef.false_val);
     try s.air_tir_inst_map.put(AirInst.IndexRef.null_lit, TirInst.IndexRef.null_val);
 
-    try s.air_tir_type_map.put(AirInst.IndexRef.bool, Value.IndexRef.boolean_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.u8, Value.IndexRef.u8_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.u16, Value.IndexRef.u16_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.u32, Value.IndexRef.u32_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.u64, Value.IndexRef.u64_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.i8, Value.IndexRef.i8_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.i16, Value.IndexRef.i16_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.i32, Value.IndexRef.i32_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.i64, Value.IndexRef.i64_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.void, Value.IndexRef.void_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.own, Value.IndexRef.own_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.ref, Value.IndexRef.ref_typ);
-    try s.air_tir_type_map.put(AirInst.IndexRef.type, Value.IndexRef.typ_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.bool, Value.IndexRef.boolean_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.u8, Value.IndexRef.u8_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.u16, Value.IndexRef.u16_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.u32, Value.IndexRef.u32_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.u64, Value.IndexRef.u64_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.i8, Value.IndexRef.i8_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.i16, Value.IndexRef.i16_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.i32, Value.IndexRef.i32_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.i64, Value.IndexRef.i64_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.void, Value.IndexRef.void_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.own, Value.IndexRef.own_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.ref, Value.IndexRef.ref_typ);
+    try s.air_tir_val_map.put(AirInst.IndexRef.type, Value.IndexRef.typ_typ);
     // try s.air_tir_type_map.put(AirInst.IndexRef.address_of_self, Type..IndexRefopaque_typ);
 
     const topmost_air = s.air.instructions.get(0);

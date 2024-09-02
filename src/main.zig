@@ -67,8 +67,8 @@ pub fn main() !void {
     // We can now free the parser contents: tokens, nodes etc.
     parser.deinit();
 
-    var tir = try tir_mod.tir_gen(&air, air.allocator);
-    defer tir.deinit();
+    // var tir = try tir_mod.tir_gen(&air, air.allocator);
+    // defer tir.deinit();
     // _ = try safety_mod.check_safety(&tir);
 
     // try llvm_gen.generate_llvm_ir(&tir);
