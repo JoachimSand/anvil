@@ -221,11 +221,11 @@ pub const AirInst = union(enum) {
     //     rhs: IndexRef,
     // },
     get_element_ptr: Air.ExtraIndex,
-    update_enum_ptr: struct {
-        ptr: IndexRef,
-        new_tag: Air.StringIndex,
-        tag_contents: IndexRef,
-    },
+    // update_enum_ptr: struct {
+    //     ptr: IndexRef,
+    //     new_tag: Air.StringIndex,
+    //     tag_contents: IndexRef,
+    // },
     alloca: struct {
         type: IndexRef,
     },
@@ -268,10 +268,16 @@ pub const AirInst = union(enum) {
         field_name: Air.StringIndex,
     },
 
-    // extract_val: struct {
-    //     target: IndexRef,
-    //     ptr: IndexRef,
-    // },
+    // Retrieves value of a container field.
+    field_val: struct {
+        container: IndexRef,
+        field_name: Air.StringIndex,
+    },
+    // Retrieves pointer to a container field.
+    field_ptr: struct {
+        container: IndexRef,
+        field_name: Air.StringIndex,
+    },
     store: struct {
         val: IndexRef,
         ptr: IndexRef,
@@ -555,7 +561,7 @@ pub const AirState = struct {
         return @enumFromInt(s.air.instructions.len - 1);
     }
 
-    fn deinit(s: *AirState) void {
+    pub fn deinit(s: *AirState) void {
         // std.debug.assert(s.scratch.items.len == 0);
         s.scratch.deinit();
 
@@ -569,6 +575,7 @@ pub const AirState = struct {
             }
         }
         s.scopes.deinit();
+        s.air.deinit();
     }
 };
 
@@ -605,6 +612,9 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
             },
             .add => |add| {
                 print("add {}, {}", .{ add.lhs, add.rhs });
+            },
+            .sub => |sub| {
+                print("sub {}, {}", .{ sub.lhs, sub.rhs });
             },
             .lt => |lt| {
                 print("lt {}, {}", .{ lt.lhs, lt.rhs });
@@ -693,9 +703,9 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 }
                 print(")", .{});
             },
-            .update_enum_ptr => |update_enum| {
-                print("update_enum_ptr {}, new_tag {s}, new_contents {}", .{ update_enum.ptr, a.get_string(update_enum.new_tag), update_enum.tag_contents });
-            },
+            // .update_enum_ptr => |update_enum| {
+            //     print("update_enum_ptr {}, new_tag {s}, new_contents {}", .{ update_enum.ptr, a.get_string(update_enum.new_tag), update_enum.tag_contents });
+            // },
             .match => |match| {
                 print("match on {}, ", .{match.enum_ptr});
                 const type_info = @typeInfo(AirInst.MatchCase);
@@ -748,6 +758,14 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 const field_name = a.get_string(field_typ.field_name);
                 print("container_field_type {} {s}", .{ field_typ.container_type, field_name });
             },
+            .field_val => |fval| {
+                const field_name = a.get_string(fval.field_name);
+                print("field_val {} {s}", .{ fval.container, field_name });
+            },
+            .field_ptr => |fptr| {
+                const field_name = a.get_string(fptr.field_name);
+                print("field_ptr {} {s}", .{ fptr.container, field_name });
+            },
             .store => |store| {
                 print("store({}, {})", .{ store.val, store.ptr });
             },
@@ -764,10 +782,10 @@ pub fn print_air(a: *Air, start: u32, stop: u32, indent: u32) !void {
                 // }
                 print("-> {} at blk %{d}", .{ fn_def.ret_type, fn_def.blk });
             },
-            else => {
-                print("AIR print unimplemented for {}", .{inst});
-                return error.Unimplemented;
-            },
+            // else => {
+            //     print("AIR print unimplemented for {}\n", .{inst});
+            //     return error.Unimplemented;
+            // },
         }
         print(";\n", .{});
         index += 1;
@@ -787,7 +805,7 @@ fn air_gen_decl_info_list(s: *AirState, d_indeces: []const Node.Index, dest_id: 
                 // TODO: PUSH SCOPE TO ALLOW REFERRING TO OTHER IDENTIFIERS IN STRUCT
                 const decl_name = try s.intern_token(type_decl.identifier);
                 // print("DECL NAME: {s}\n", .{s.air.get_string(decl_name)});
-                const type_inst = try air_gen_expr(s, type_decl.decl_type, null, dest_id, .ref);
+                const type_inst = try air_gen_expr(s, type_decl.decl_type, dest_id, .ref);
 
                 var field_info: AirInst.DeclInfo = undefined;
                 if (decl == .mut_var_decl_type) {
@@ -820,46 +838,46 @@ fn air_gen_enum_def(s: *AirState, d_indeces: []const Node.Index, dest_id: ?Air.S
     return s.append_inst(inst);
 }
 
-fn air_gen_struct_lit(s: *AirState, target_type_index: Node.Index, assignments: []const Node.Index, maybe_alloc_inst: ?AirInst.IndexRef) AirError!AirInst.IndexRef {
-    const container_type = try air_gen_expr(s, target_type_index, null, null, .ref);
-    var alloc_inst: AirInst.IndexRef = undefined;
-    if (maybe_alloc_inst) |inst| {
-        alloc_inst = inst;
-    } else {
-        alloc_inst = try s.append_inst(AirInst{ .alloca_mut = .{ .type = container_type } });
-    }
+// fn air_gen_struct_lit(s: *AirState, target_type_index: Node.Index, assignments: []const Node.Index, maybe_alloc_inst: ?AirInst.IndexRef) AirError!AirInst.IndexRef {
+//     const container_type = try air_gen_expr(s, target_type_index, null, .ref);
+//     var alloc_inst: AirInst.IndexRef = undefined;
+//     if (maybe_alloc_inst) |inst| {
+//         alloc_inst = inst;
+//     } else {
+//         alloc_inst = try s.append_inst(AirInst{ .alloca_mut = .{ .type = container_type } });
+//     }
 
-    //
-    for (assignments) |assign_index| {
-        const cur_assign = s.ast.nodes.items[assign_index];
-        // print("Curassign {}\n", .{cur_assign});
-        if (cur_assign != .assignment) {
-            return error.Unimplemented;
-        }
-        const assign_node = cur_assign.assignment;
-        const target_type = s.ast.nodes.items[assign_node.target];
-        if (target_type != .identifier) {
-            return error.Unimplemented;
-        }
+//     //
+//     for (assignments) |assign_index| {
+//         const cur_assign = s.ast.nodes.items[assign_index];
+//         // print("Curassign {}\n", .{cur_assign});
+//         if (cur_assign != .assignment) {
+//             return error.Unimplemented;
+//         }
+//         const assign_node = cur_assign.assignment;
+//         const target_type = s.ast.nodes.items[assign_node.target];
+//         if (target_type != .identifier) {
+//             return error.Unimplemented;
+//         }
 
-        const field_name = try s.intern_token(target_type.identifier);
-        // print("Field name {s}\n", .{s.air.get_string(field_name)});
-        const start_and_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
-        try s.air.extra.append(field_name);
-        const get_element = AirInst.GetElementPtr{ .aggregate_ptr = alloc_inst, .fields = .{ .start = start_and_end, .end = start_and_end + 1 } };
-        const get_element_extra = try s.air.append_extra_struct(get_element);
-        const get_elem_inst = try s.append_inst(AirInst{ .get_element_ptr = get_element_extra });
+//         const field_name = try s.intern_token(target_type.identifier);
+//         // print("Field name {s}\n", .{s.air.get_string(field_name)});
+//         const start_and_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
+//         try s.air.extra.append(field_name);
+//         const get_element = AirInst.GetElementPtr{ .aggregate_ptr = alloc_inst, .fields = .{ .start = start_and_end, .end = start_and_end + 1 } };
+//         const get_element_extra = try s.air.append_extra_struct(get_element);
+//         const get_elem_inst = try s.append_inst(AirInst{ .get_element_ptr = get_element_extra });
 
-        const expr_inst = try air_gen_expr(s, assign_node.expr, alloc_inst, null, .ref);
+//         const expr_inst = try air_gen_expr(s, assign_node.expr, null, .ref);
 
-        const type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
-        const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = type_inst, .expr = expr_inst } });
+//         const type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
+//         const type_as_inst = try s.append_inst(AirInst{ .type_as = .{ .type = type_inst, .expr = expr_inst } });
 
-        _ = try s.append_inst(.{ .store = .{ .val = type_as_inst, .ptr = get_elem_inst } });
-    }
+//         _ = try s.append_inst(.{ .store = .{ .val = type_as_inst, .ptr = get_elem_inst } });
+//     }
 
-    return alloc_inst;
-}
+//     return alloc_inst;
+// }
 
 fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, get_cap: AirInst.IndexRef, dest_id: ?Air.StringIndex) AirError!AirInst.IndexRef {
     const fn_call = s.ast.get_extra_struct(Node.FnCallFull, fn_call_extra);
@@ -872,7 +890,7 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, get_cap: AirIns
             if (params.len != 1) {
                 return error.AllocExpectsOneArg;
             }
-            const param_expr = try air_gen_expr(s, params[0], null, dest_id, get_cap);
+            const param_expr = try air_gen_expr(s, params[0], dest_id, get_cap);
             return s.append_inst(AirInst{ .memalloc = .{ .expr = param_expr } });
         },
         .built_in_free => {
@@ -880,7 +898,7 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, get_cap: AirIns
             if (params.len != 1) {
                 return error.FreeExpectsOneArg;
             }
-            const param_expr = try air_gen_expr(s, params[0], null, dest_id, get_cap);
+            const param_expr = try air_gen_expr(s, params[0], dest_id, get_cap);
             return s.append_inst(AirInst{ .memfree = .{ .expr = param_expr } });
         },
         .built_in_print => {
@@ -888,14 +906,14 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, get_cap: AirIns
             if (params.len != 1) {
                 return error.PrintExpectsOneArg;
             }
-            const param_expr = try air_gen_expr(s, params[0], null, dest_id, get_cap);
+            const param_expr = try air_gen_expr(s, params[0], dest_id, get_cap);
             return s.append_inst(AirInst{ .print = .{ .expr = param_expr } });
         },
         .identifier => |id| {
             const fn_name = try s.intern_token(id);
             const params = s.ast.extra.items[fn_call.args.start..fn_call.args.end];
             for (params) |param| {
-                const param_expr = try air_gen_expr(s, param, null, dest_id, get_cap);
+                const param_expr = try air_gen_expr(s, param, dest_id, get_cap);
                 try s.scratch.append(@intFromEnum(param_expr));
             }
             const air_params = try s.pop_scratch_to_extra(params.len);
@@ -905,7 +923,8 @@ fn air_gen_fn_call(s: *AirState, fn_call_extra: Node.ExtraIndex, get_cap: AirIns
     }
 }
 
-fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, dest_id: ?Air.StringIndex, get_cap: AirInst.IndexRef) AirError!AirInst.IndexRef {
+// Returns an l-value.
+fn air_gen_expr(s: *AirState, index: Node.Index, dest_id: ?Air.StringIndex, get_cap: AirInst.IndexRef) AirError!AirInst.IndexRef {
     // print("AIR inst. count is {}\n", .{s.air.instructions.len});
     // print("AIR Expr gen for the following node: \n", .{});
     // try pretty_print_mod.print_ast_start(s.ast, index);
@@ -921,7 +940,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             return air_gen_enum_def(s, d_indeces, dest_id);
         },
         .struct_literal => |struct_lit| {
-            const container_type = try air_gen_expr(s, struct_lit.target_type, null, null, .ref);
+            const container_type = try air_gen_expr(s, struct_lit.target_type, null, .ref);
 
             // Generate AIR for each individual assignment in the literal.
             const assignments = s.ast.extra.items[struct_lit.assignments_start..struct_lit.assignments_end];
@@ -938,7 +957,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
                 }
 
                 const field_name = try s.intern_token(target.identifier);
-                const expr_inst = try air_gen_expr(s, assign_node.expr, alloc_inst, null, .ref);
+                const expr_inst = try air_gen_expr(s, assign_node.expr, null, .ref);
                 const field_type_inst = AirInst{ .container_field_type = .{ .field_name = field_name, .container_type = container_type } };
                 const field_type_ref = try s.append_inst(field_type_inst);
 
@@ -962,20 +981,20 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .enum_literal => |enum_lit| {
             // Type of the enum we are instantiating an instance of
-            const enum_target = try air_gen_expr(s, enum_lit.enum_target, null, dest_id, get_cap);
-            const new_expr = try air_gen_expr(s, enum_lit.expr, alloc_inst, dest_id, get_cap);
+            const enum_target = try air_gen_expr(s, enum_lit.enum_target, dest_id, get_cap);
+            // const new_expr = try air_gen_expr(s, enum_lit.expr, dest_id, get_cap);
 
             // The active tag name
-            const active_tag = try s.intern_token(enum_lit.active_identifier);
+            // const active_tag = try s.intern_token(enum_lit.active_identifier);
             var enum_alloc: AirInst.IndexRef = undefined;
-            if (alloc_inst) |inst| {
-                enum_alloc = inst;
-            } else {
-                enum_alloc = try s.append_inst(AirInst{ .alloca_mut = .{ .type = enum_target } });
-            }
+            // if (alloc_inst) |inst| {
+            //     enum_alloc = inst;
+            // } else {
+            enum_alloc = try s.append_inst(AirInst{ .alloca_mut = .{ .type = enum_target } });
+            // }
 
-            const update_enum = AirInst{ .update_enum_ptr = .{ .ptr = enum_alloc, .new_tag = active_tag, .tag_contents = new_expr } };
-            _ = try s.append_inst(update_enum);
+            // const update_enum = AirInst{ .update_enum_ptr = .{ .ptr = enum_alloc, .new_tag = active_tag, .tag_contents = new_expr } };
+            // _ = try s.append_inst(update_enum);
             return enum_alloc;
         },
         .fn_call_full => |fn_call_extra| {
@@ -983,8 +1002,8 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .binary_exp => |bin_exp| {
             const bin_tok = s.ast.tokens.get(bin_exp.op_tok);
-            const lhs_index = try air_gen_expr(s, bin_exp.lhs, null, null, get_cap);
-            const rhs_index = try air_gen_expr(s, bin_exp.rhs, null, null, get_cap);
+            const lhs_index = try air_gen_expr(s, bin_exp.lhs, null, get_cap);
+            const rhs_index = try air_gen_expr(s, bin_exp.rhs, null, get_cap);
 
             const inst = switch (bin_tok.type) {
                 .plus => AirInst{ .add = .{ .lhs = lhs_index, .rhs = rhs_index } },
@@ -996,9 +1015,12 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
         },
         .prefix_exp => |prefix| {
             switch (prefix.token.type) {
-                .keyword_move => {
-                    const move_target = try air_gen_expr(s, prefix.target, null, dest_id, .own);
-                    return s.append_inst(.{ .move = move_target });
+                .keyword_move => return s.append_inst(.{ .move = try air_gen_expr(s, prefix.target, dest_id, .own) }),
+                .minus => {
+                    const target = try air_gen_expr(s, prefix.target, dest_id, .own);
+                    // TODO: Zero and other common constants should perhaps be a reference
+                    const zero = try s.append_inst(AirInst{ .int = 0 });
+                    return s.append_inst(AirInst{ .sub = .{ .lhs = zero, .rhs = target } });
                 },
                 else => return error.Unimplemented,
             }
@@ -1012,7 +1034,7 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
                 }
             }
             // TODO: UNDO this
-            // const ref_target = try air_gen_expr(s, ref.target, null, dest_id, load_cap);
+            // const ref_target = try air_gen_expr(s, ref.target, dest_id, load_cap);
             return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = .ref } });
         },
         .ref_cap => |ref| {
@@ -1020,45 +1042,55 @@ fn air_gen_expr(s: *AirState, index: Node.Index, alloc_inst: ?AirInst.IndexRef, 
             // print("{} {?}\n", .{ target_node, dest_id });
             if (dest_id) |id| {
                 if (target_node == .identifier and (try s.intern_token(target_node.identifier)) == id) {
-                    const ref_cap = try air_gen_expr(s, ref.cap_expr, null, dest_id, get_cap);
+                    const ref_cap = try air_gen_expr(s, ref.cap_expr, dest_id, get_cap);
                     return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = ref_cap } });
                 }
             }
             // TODO: UNDO this
-            // const ref_target = try air_gen_expr(s, ref.target, null, dest_id, load_cap);
-            const ref_cap = try air_gen_expr(s, ref.cap_expr, null, dest_id, get_cap);
+            // const ref_target = try air_gen_expr(s, ref.target, dest_id, load_cap);
+            const ref_cap = try air_gen_expr(s, ref.cap_expr, dest_id, get_cap);
             return s.append_inst(.{ .address_of = .{ .target = .address_of_self, .cap = ref_cap } });
         },
         .deref => |deref| {
-            const deref_target = try air_gen_expr(s, deref.target, null, dest_id, get_cap);
+            const deref_target = try air_gen_expr(s, deref.target, dest_id, get_cap);
             return s.append_inst(.{ .deref = deref_target });
         },
         .field_access => |access| {
             var fa_node = cur_node;
             var fa_index = index;
-            const field_names_start: Air.ExtraIndex = @intCast(s.air.extra.items.len);
+            var fa_target = try air_gen_expr(s, fa_node.field_access.target, dest_id, get_cap);
             while (fa_node == .field_access) {
                 const field_name = try s.intern_token(access.field_id);
-                _ = try s.air.extra.append(field_name);
+                fa_target = try s.append_inst(.{ .field_val = .{ .field_name = field_name, .container = fa_target } });
 
                 fa_index = fa_node.field_access.target;
                 fa_node = s.ast.nodes.items[fa_index];
             }
-            const field_names_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
-            const fa_target = try air_gen_expr(s, fa_index, null, dest_id, get_cap);
+            return fa_target;
 
-            const element_ptr = AirInst.GetElementPtr{ .aggregate_ptr = fa_target, .fields = .{ .start = field_names_start, .end = field_names_end } };
-            const extra_index = try s.air.append_extra_struct(element_ptr);
-            const get_elem_inst = try s.append_inst(AirInst{ .get_element_ptr = extra_index });
-            // target_ptr_inst = get_elem_inst;
+            // const field_names_start: Air.ExtraIndex = @intCast(s.air.extra.items.len);
+            // while (fa_node == .field_access) {
+            //     const field_name = try s.intern_token(access.field_id);
+            //     _ = try s.air.extra.append(field_name);
 
-            const get_val_inst = try s.append_inst(AirInst{ .get = .{ .src = get_elem_inst, .cap = get_cap } });
-            return get_val_inst;
+            //     fa_index = fa_node.field_access.target;
+            //     fa_node = s.ast.nodes.items[fa_index];
+            // }
+            // const field_names_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
+            // const fa_target = try air_gen_expr(s, fa_index, dest_id, get_cap);
+
+            // const element_ptr = AirInst.GetElementPtr{ .aggregate_ptr = fa_target, .fields = .{ .start = field_names_start, .end = field_names_end } };
+            // const extra_index = try s.air.append_extra_struct(element_ptr);
+            // const get_elem_inst = try s.append_inst(AirInst{ .get_element_ptr = extra_index });
+            // // target_ptr_inst = get_elem_inst;
+
+            // const get_val_inst = try s.append_inst(AirInst{ .get = .{ .src = get_elem_inst, .cap = get_cap } });
+            // return get_val_inst;
             // target_type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
         },
         .indexing => |indexing| {
-            const index_expr = try air_gen_expr(s, indexing.index, null, dest_id, get_cap);
-            const target = try air_gen_expr(s, indexing.target, null, dest_id, get_cap);
+            const index_expr = try air_gen_expr(s, indexing.index, dest_id, get_cap);
+            const target = try air_gen_expr(s, indexing.target, dest_id, get_cap);
             return s.append_inst(.{ .indexing = .{ .target = target, .index = index_expr } });
         },
         .identifier => |tok_index| {
@@ -1113,16 +1145,14 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
     const id_str = try s.intern_token(id);
     var expr_inst_ref: AirInst.IndexRef = undefined;
     if (expr) |expr_node| {
-        expr_inst_ref = try air_gen_expr(s, expr_node, null, id_str, .ref);
+        expr_inst_ref = try air_gen_expr(s, expr_node, id_str, .ref);
     } else if (type_node) |typ| {
         // We allow type-only declarations for arrays - these are zero initialized.
         const node = s.ast.nodes.items[typ];
         if (node == .indexing) {
-            const type_inst = try air_gen_expr(s, typ, null, id_str, .ref);
+            const type_inst = try air_gen_expr(s, typ, id_str, .ref);
             const zero_inst = try s.append_inst(.{ .zero_array = type_inst });
             if (mutable) {
-                // const alloc_inst = try s.append_inst(.{ .alloc = .{ .type = type_inst } });
-                // _ = try s.append_inst(.{ .store = .{ .ptr = alloc_inst, .val = zero_inst } });
                 try s.push_var(id, mutable, zero_inst, type_inst);
             } else {
                 try s.push_var(id, mutable, zero_inst, type_inst);
@@ -1135,7 +1165,7 @@ fn air_gen_decl(s: *AirState, id: Token.Index, mutable: bool, type_node: ?Node.I
 
     var type_inst: AirInst.IndexRef = undefined;
     if (type_node) |node| {
-        type_inst = try air_gen_expr(s, node, null, id_str, .ref);
+        type_inst = try air_gen_expr(s, node, id_str, .ref);
     } else {
         type_inst = try s.append_inst(.{ .type_of = expr_inst_ref });
     }
@@ -1171,7 +1201,7 @@ fn end_block(s: *AirState, block: AirInst.Index) void {
 // ) !void {
 //     const expr_inst = try air_gen_expr(s, assign.expr);
 
-//     const target_node = s.ast.nodes.items[assign.target];
+// const target_node = s.ast.nodes.items[assign.target];
 //     if (target_node != .identifier) {
 //         unreachable;
 //     }
@@ -1196,7 +1226,7 @@ fn air_gen_function(s: *AirState, fn_name_id: Token.Index, params: ?[]const Node
                 .var_decl_full, .mut_var_decl_full, .var_decl_expr, .mut_var_decl_expr => return error.Unimplemented,
                 .var_decl_type => |type_decl| {
                     const decl_name = try s.intern_token(type_decl.identifier);
-                    const type_inst = try air_gen_expr(s, type_decl.decl_type, null, null, .ref);
+                    const type_inst = try air_gen_expr(s, type_decl.decl_type, null, .ref);
 
                     const arg_inst = AirInst{ .arg = .{ .name = decl_name, .type = type_inst } };
                     const arg_inst_index = try s.append_inst(arg_inst);
@@ -1215,7 +1245,7 @@ fn air_gen_function(s: *AirState, fn_name_id: Token.Index, params: ?[]const Node
     const param_slice = try s.pop_scratch_to_extra(count);
     // const param_slice = try air_gen_decl_info_list(s, param_indeces, true);
 
-    const air_ret_type = try air_gen_expr(s, ret_type, null, null, .ref);
+    const air_ret_type = try air_gen_expr(s, ret_type, null, .ref);
 
     // Generate statements withins block
     const fn_s_indeces = try get_block_statements(s, blk);
@@ -1275,39 +1305,32 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                         old_val_inst = .{ .get = .{ .src = target_info.inst, .cap = .own } };
                     },
                     .field_access => |access| {
-                        var cur_node = target_node;
-                        const field_names_start: Air.ExtraIndex = @intCast(s.air.extra.items.len);
-                        while (cur_node == .field_access) {
+                        var fa_node = target_node;
+                        var fa_index = assign.target;
+                        var fa_target = try air_gen_expr(s, fa_node.field_access.target, dest_id, .own);
+                        while (fa_node == .field_access) {
                             const field_name = try s.intern_token(access.field_id);
-                            _ = try s.air.extra.append(field_name);
+                            fa_target = try s.append_inst(.{ .field_ptr = .{ .field_name = field_name, .container = fa_target } });
 
-                            cur_node = s.ast.nodes.items[cur_node.field_access.target];
+                            fa_index = fa_node.field_access.target;
+                            fa_node = s.ast.nodes.items[fa_index];
                         }
-                        const field_names_end: Air.ExtraIndex = @intCast(s.air.extra.items.len);
-                        if (cur_node != .identifier) {
-                            return error.Unimplemented;
-                        }
-                        const id = cur_node.identifier;
+
+                        const id = fa_node.identifier;
                         const target_info = try s.get_var(id);
 
                         if (target_info.mutable == false) {
                             return error.AssignToImm;
                         }
-                        const element_ptr = AirInst.GetElementPtr{ .aggregate_ptr = target_info.inst, .fields = .{ .start = field_names_start, .end = field_names_end } };
-                        const extra_index = try s.air.append_extra_struct(element_ptr);
-                        const get_elem_inst = try s.append_inst(AirInst{ .get_element_ptr = extra_index });
-                        target_ptr_inst = get_elem_inst;
-
-                        old_val_inst = .{ .get = .{ .src = get_elem_inst, .cap = .own } };
-                        // target_type_inst = try s.append_inst(.{ .type_of_deref = get_elem_inst });
-                        // target_type_inst = target_info.type_inst;
+                        target_ptr_inst = fa_target;
+                        old_val_inst = .{ .get = .{ .src = fa_target, .cap = .own } };
                     },
 
                     else => return error.Unimplemented,
                 }
 
                 const assign_tok = s.ast.tokens.get(assign.token);
-                var expr_inst = try air_gen_expr(s, assign.expr, target_ptr_inst, null, .ref);
+                var expr_inst = try air_gen_expr(s, assign.expr, null, .ref);
                 if (assign_tok.type != .equal) {
                     const old_val_inst_index = try s.append_inst(old_val_inst);
                     const assign_inst = switch (assign_tok.type) {
@@ -1333,7 +1356,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 // Conditional block
                 const cond_blk = try start_new_block(s);
                 s.air.instructions.set(@intFromEnum(prev_block_br), .{ .br = @enumFromInt(cond_blk) });
-                const cond_inst = try air_gen_expr(s, while_statement.condition, null, null, .ref);
+                const cond_inst = try air_gen_expr(s, while_statement.condition, null, .ref);
                 var cond_br = AirInst.BrEither{ .cond = cond_inst, .then_blk = undefined, .else_blk = undefined };
                 const cond_br_index = try s.append_inst(undefined);
 
@@ -1354,7 +1377,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 s.air.instructions.set(@intFromEnum(cond_br_index), cond_br_inst);
             },
             .if_else_statement => |if_else| {
-                const cond_inst = try air_gen_expr(s, if_else.condition, null, null, .ref);
+                const cond_inst = try air_gen_expr(s, if_else.condition, null, .ref);
 
                 const br_inst = try s.append_inst(undefined);
                 end_block(s, cur_block_inst);
@@ -1378,7 +1401,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 s.air.instructions.set(@intFromEnum(then_br_end), .{ .br = @enumFromInt(cur_block_inst) });
             },
             .ret_statement => |ret| {
-                const expr = try air_gen_expr(s, ret.expr, null, null, .ref);
+                const expr = try air_gen_expr(s, ret.expr, null, .ref);
                 _ = try s.append_inst(AirInst{ .ret = expr });
             },
             .ret_statement_empty => {
@@ -1391,7 +1414,7 @@ fn air_gen_statements(s: *AirState, s_indeces: []const Node.Index, start_block: 
                 const match_inst_index = try s.append_inst(undefined);
 
                 end_block(s, cur_block_inst);
-                const enum_ptr = try air_gen_expr(s, match.expr, null, null, .ref);
+                const enum_ptr = try air_gen_expr(s, match.expr, null, .ref);
                 const match_cases = s.ast.extra.items[match.cases_start..match.cases_end];
                 // print("match cases {any} {}\n", .{ match_cases, match_cases.len });
                 for (match_cases) |case_index| {
@@ -1487,8 +1510,8 @@ fn air_gen_scoped_block(s: *AirState, n_index: Node.Index, new_scope: bool, dest
     return @enumFromInt(blk_inst);
 }
 
-pub fn air_gen(ast: *Ast) !Air {
-    var s = AirState{
+pub fn new_air_state(ast: *Ast) !AirState {
+    const s = AirState{
         .air = Air{
             .instructions = AirInst.List{},
             .extra = Air.ExtraList.init(ast.allocator),
@@ -1505,10 +1528,11 @@ pub fn air_gen(ast: *Ast) !Air {
 
         .ast = ast,
     };
-    defer s.deinit();
+    return s;
+}
 
-    // const root_node = ast.nodes.items[ast.root].root;
-    _ = try air_gen_scoped_block(&s, ast.root, true, null);
+pub fn air_gen(s: *AirState) !Air {
+    _ = try air_gen_scoped_block(s, s.ast.root, true, null);
 
     print("\n=========== GENERATED AIR ===========\n", .{});
     try print_air(&s.air, 0, @intCast(s.air.instructions.len), 0);

@@ -61,11 +61,14 @@ pub fn main() !void {
         return e;
     };
     try pretty_print_mod.print_ast_start(&ast, ast.root);
+    defer parser.deinit();
 
-    var air = try air_mod.air_gen(&ast);
-    defer air.deinit();
+    var air_state = try air_mod.new_air_state(&ast);
+    defer air_state.deinit();
+
+    const air = try air_mod.air_gen(&air_state);
+    _ = air;
     // We can now free the parser contents: tokens, nodes etc.
-    parser.deinit();
 
     // var tir = try tir_mod.tir_gen(&air, air.allocator);
     // defer tir.deinit();
