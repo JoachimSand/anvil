@@ -53,7 +53,7 @@ pub const Value = union(enum) {
         opaque_typ,
         _,
 
-        pub fn is_ref(ref: *const Value.IndexRef) bool {
+        pub fn is_index(ref: *const Value.IndexRef) bool {
             if (@intFromEnum(ref.*) < Value.RefStart) {
                 return true;
             } else {
@@ -61,10 +61,14 @@ pub const Value = union(enum) {
             }
         }
 
+        pub fn get_index(ref: *const IndexRef) Index {
+            return @intFromEnum(ref.*);
+        }
+
         pub fn format(ref: *const IndexRef, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
             _ = fmt;
             _ = options;
-            if (ref.is_ref()) {
+            if (ref.is_index()) {
                 try std.fmt.format(writer, "%val_ref.{d}", .{@intFromEnum(ref.*)});
             } else {
                 try std.fmt.format(writer, "{s}", .{@tagName(ref.*)});
@@ -75,7 +79,7 @@ pub const Value = union(enum) {
     const List = std.MultiArrayList(Value);
     const Field = struct { var_name: Air.StringIndex, field_type: Value.IndexRef };
 
-    const TirAggregrate = struct {
+    const TirContainer = struct {
         fields_start: Index,
         fields_end: Index,
     };
@@ -94,11 +98,10 @@ pub const Value = union(enum) {
 
     // recursive_ptr: struct { deref_type: IndexRef, cap: IndexRef },
     ptr_typ: struct { deref_type: IndexRef, cap: IndexRef },
-    struct_typ: TirAggregrate,
-    struct_field_typ: Field,
-    mut_struct_field_typ: Field,
-    enum_typ: TirAggregrate,
-    enum_field_typ: Field,
+    struct_typ: TirContainer,
+    field_typ: Field,
+    mut_field_typ: Field,
+    enum_typ: TirContainer,
 
     array_typ: struct {
         size: u32,
@@ -115,7 +118,7 @@ fn type_ref_eq(s: *TirState, a: Value.IndexRef, b: Value.IndexRef, own_coerce: b
         // if (a == .opaque_typ or b == .opaque_typ) {
         //     return true;
         // }
-        if (a.is_ref() and b.is_ref()) {
+        if (a.is_index() and b.is_index()) {
             const a_type = s.tir.values.get(@intFromEnum(a));
             const b_type = s.tir.values.get(@intFromEnum(b));
 
@@ -149,7 +152,7 @@ fn type_ref_eq_stackref_coerce(s: *TirState, a: Value.IndexRef, b: Value.IndexRe
         if (a == .opaque_typ or b == .opaque_typ) {
             return true;
         }
-        if (a.is_ref() and b.is_ref()) {
+        if (a.is_index() and b.is_index()) {
             const a_type = s.tir.values.get(@intFromEnum(a));
             // const b_type = t.tir.types.get(@intFromEnum(b));
 
@@ -398,6 +401,7 @@ const TirSpecificError = error{
     DerefOnPrimitive,
     DerefOnInvalidType,
     InvalidTagName,
+    InvalidFieldName,
     UndefinedVar,
 };
 
@@ -483,8 +487,8 @@ const TirState = struct {
         try t.air_tir_inst_map.put(@enumFromInt(air_index), tir_index);
     }
 
-    fn set_val_mapping(t: *TirState, air_index: AirInst.Index, tir_type: Value.IndexRef) !void {
-        try t.air_tir_val_map.put(@enumFromInt(air_index), tir_type);
+    fn set_val_mapping(t: *TirState, air_index: AirInst.Index, tir_val: Value.IndexRef) !void {
+        try t.air_tir_val_map.put(@enumFromInt(air_index), tir_val);
     }
 
     fn append_constant_val(t: *TirState, val: Value, air_index: AirInst.Index) !void {
@@ -546,14 +550,14 @@ fn print_type(t: *Tir, type_ref: Value.IndexRef) !void {
                     while (cur_field_index < tir_container.fields_end) : (cur_field_index += 1) {
                         const cur_field = t.values.get(cur_field_index);
                         switch (cur_field) {
-                            .struct_field_typ, .enum_field_typ => |field| {
+                            .field_typ => |field| {
                                 const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("{s} : ", .{field_name});
                                 try print_type(t, field_type);
                                 print(", ", .{});
                             },
-                            .mut_struct_field_typ => |field| {
+                            .mut_field_typ => |field| {
                                 const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("mut {s} : ", .{field_name});
@@ -625,14 +629,14 @@ fn print_val(t: *Tir, val_ref: Value.IndexRef) void {
                     while (cur_field_index < tir_container.fields_end) : (cur_field_index += 1) {
                         const cur_field = t.values.get(cur_field_index);
                         switch (cur_field) {
-                            .struct_field_typ, .enum_field_typ => |field| {
+                            .field_typ => |field| {
                                 const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("{s} : ", .{field_name});
                                 try print_type(t, field_type);
                                 print(", ", .{});
                             },
-                            .mut_struct_field_typ => |field| {
+                            .mut_field_typ => |field| {
                                 const field_name = t.air.get_string(field.var_name);
                                 const field_type = field.field_type;
                                 print("mut {s} : ", .{field_name});
@@ -873,12 +877,12 @@ fn get_val_index(s: *TirState, tir_ref: TirInst.IndexRef) !?Value.Index {
     }
 }
 
-fn get_enum_field(s: *TirState, enum_agg: Value.TirAggregrate, field_name: Air.StringIndex) !struct { Value.Field, u32 } {
+fn get_enum_field(s: *TirState, enum_agg: Value.TirContainer, field_name: Air.StringIndex) !struct { Value.Field, u32 } {
     var enum_field_index = enum_agg.fields_start;
     while (enum_field_index < enum_agg.fields_end) : (enum_field_index += 1) {
         const cur_field = s.tir.values.get(enum_field_index);
         switch (cur_field) {
-            .enum_field_typ => |enum_field| {
+            .field_typ => |enum_field| {
                 if (enum_field.var_name == field_name) {
                     return .{ enum_field, enum_field_index - enum_agg.fields_start };
                 }
@@ -912,17 +916,13 @@ fn gen_copy_equiv_type(s: *TirState, type_ref: Value.IndexRef) !Value.IndexRef {
                         const old_field_type = s.tir.values.get(cur_field_index);
                         var new_field: Value = undefined;
                         switch (old_field_type) {
-                            .struct_field_typ => |field| {
+                            .field_typ => |field| {
                                 const new_field_type = try gen_copy_equiv_type(s, field.field_type);
-                                new_field = .{ .struct_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
+                                new_field = .{ .field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
                             },
-                            .mut_struct_field_typ => |field| {
+                            .mut_field_typ => |field| {
                                 const new_field_type = try gen_copy_equiv_type(s, field.field_type);
-                                new_field = .{ .mut_struct_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
-                            },
-                            .enum_field_typ => |field| {
-                                const new_field_type = try gen_copy_equiv_type(s, field.field_type);
-                                new_field = .{ .enum_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
+                                new_field = .{ .mut_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
                             },
                             else => unreachable,
                         }
@@ -951,13 +951,13 @@ fn gen_copy_equiv_type(s: *TirState, type_ref: Value.IndexRef) !Value.IndexRef {
                     //     const old_field_type = s.tir.types.get(s_field);
                     //     var new_field: Type = undefined;
                     //     switch (old_field_type) {
-                    //         .struct_field_typ => |field| {
+                    //         .field_typ => |field| {
                     //             const new_field_type = try gen_copy_equiv_type(s, field.field_type);
-                    //             new_field = .{ .struct_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
+                    //             new_field = .{ .field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
                     //         },
-                    //         .mut_struct_field_typ => |field| {
+                    //         .mut_field_typ => |field| {
                     //             const new_field_type = try gen_copy_equiv_type(s, field.field_type);
-                    //             new_field = .{ .mut_struct_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
+                    //             new_field = .{ .mut_field_typ = .{ .var_name = field.var_name, .field_type = new_field_type } };
                     //         },
                     //         .enum_field_typ => |field| {
                     //             const new_field_type = try gen_copy_equiv_type(s, field.field_type);
@@ -989,7 +989,7 @@ fn gen_copy_equiv_type(s: *TirState, type_ref: Value.IndexRef) !Value.IndexRef {
     }
 }
 
-fn get_aggregate_type(s: *TirState, type_ref: Value.IndexRef, get_enum: bool) !Value.TirAggregrate {
+fn get_aggregate_type(s: *TirState, type_ref: Value.IndexRef, get_enum: bool) !Value.TirContainer {
     switch (type_ref) {
         .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ, .void_typ, .typ_typ, .own_typ, .ref_typ, .stackref_typ, .opaque_typ => {
             print("Expected aggregrate type, got {}", .{type_ref});
@@ -1210,7 +1210,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
     var air_index: u32 = air_bb_start;
     const air_instructions = s.air.instructions.slice();
     // print("Generating instructions from {}\n", .{air_bb_start});
-    while (air_index < s.air.instructions.len) : (air_index += 1) {
+    instr_loop: while (air_index < s.air.instructions.len) : (air_index += 1) {
         const air_ref: AirInst.IndexRef = @enumFromInt(air_index);
         // print("\n{} Generating TIR for AIR instruction: ", .{s.tir.instructions.len});
         // try air_mod.print_air(s.air, air_index, air_index + 1, 0);
@@ -1325,10 +1325,10 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 }
             },
             .struct_def, .enum_def => |air_container_def| {
-                const type_info = @typeInfo(AirInst.DeclInfo);
                 const tir_container_type_index = try s.append_val_ref(undefined);
                 try s.air_tir_val_map.put(air_ref, tir_container_type_index);
 
+                const type_info = @typeInfo(AirInst.DeclInfo);
                 const decl_info_field_count: Air.ExtraIndex = @intCast(type_info.Struct.fields.len);
                 var extra = air_container_def.start;
                 const tir_fields_start: Value.Index = @intCast(s.tir.values.len);
@@ -1347,14 +1347,10 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                     // };
                     var tir_field: Value = undefined;
 
-                    if (air_inst == .struct_def) {
-                        if (field_info.mutable) {
-                            tir_field = Value{ .mut_struct_field_typ = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
-                        } else {
-                            tir_field = Value{ .struct_field_typ = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
-                        }
+                    if (field_info.mutable) {
+                        tir_field = Value{ .mut_field_typ = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
                     } else {
-                        tir_field = Value{ .enum_field_typ = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
+                        tir_field = Value{ .field_typ = .{ .var_name = field_info.var_name, .field_type = tir_field_type } };
                     }
 
                     _ = try s.append_val(tir_field);
@@ -1371,140 +1367,165 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 }
                 s.tir.values.set(@intFromEnum(tir_container_type_index), tir_container);
             },
-            .update_enum_ptr => |air_update_enum| {
-                const tir_enum_ptr_inst = try s.get_inst_mapping(air_update_enum.ptr);
-                const tir_enum_ptr_type = try get_tir_inst_ret_type(s, tir_enum_ptr_inst);
-
-                const tir_enum_type = s.tir.values.get(@intFromEnum(tir_enum_ptr_type)).ptr_typ.deref_type;
-                const tir_enum = try get_aggregate_type(s, tir_enum_type, true);
-
-                // TODO: Use get_enum_field
-                var tag: u32 = undefined;
-                var tag_field_type: Value.IndexRef = undefined;
-                var enum_field_index = tir_enum.fields_start;
-                while (enum_field_index < tir_enum.fields_end) : (enum_field_index += 1) {
-                    const cur_field = s.tir.values.get(enum_field_index);
-                    switch (cur_field) {
-                        .enum_field_typ,
-                        => |enum_field| {
-                            if (enum_field.var_name == air_update_enum.new_tag) {
-                                tag = enum_field_index - tir_enum.fields_start;
-                                tag_field_type = enum_field.field_type;
-                                break;
-                            }
-                        },
-                        else => unreachable,
-                    }
+            .container_field_type => |cft| {
+                const container_typ = try s.get_val_mapping(cft.container_type);
+                if (container_typ.is_index() == false) {
+                    print("Container ref: {}", .{container_typ});
+                    return error.MismatchedTypes;
                 }
-
-                const tir_tag_contents = try s.get_inst_mapping(air_update_enum.tag_contents);
-                // TODO: This will remove booleans
-                const tir_tag_contents_val = get_val_index(s, tir_tag_contents) catch null;
-                if (tir_tag_contents_val) |val_index| {
-                    const val_type = try get_val_type(s, val_index);
-                    if (type_ref_eq(s, val_type, tag_field_type, true) == false) {
-                        return error.MismatchedEnumFieldType;
-                    }
-
-                    const inst = TirInst{ .update_enum_ptr_with_val = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_val = tir_tag_contents } };
-                    const inst_ref = try s.append_inst(inst);
-                    try s.air_tir_inst_map.put(air_ref, inst_ref);
-                } else {
-                    const contents_type_ref = try get_tir_inst_ret_type(s, tir_tag_contents);
-                    switch (contents_type_ref) {
-                        .typ_typ => return error.Unimplemented,
-                        .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ, .void_typ, .own_typ, .ref_typ, .stackref_typ, .opaque_typ => {
-                            if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false) {
-                                return error.MismatchedEnumFieldType;
+                const val = s.tir.values.get(container_typ.get_index());
+                switch (val) {
+                    .struct_typ, .enum_typ => |ctyp| {
+                        var val_index = ctyp.fields_start;
+                        while (val_index < ctyp.fields_end) : (val_index += 1) {
+                            const field_ref = s.tir.values.get(val_index);
+                            switch (field_ref) {
+                                .field_typ, .mut_field_typ => |field_typ| {
+                                    try s.set_val_mapping(air_index, field_typ.field_type);
+                                    continue :instr_loop;
+                                },
+                                else => unreachable,
                             }
-
-                            const inst = TirInst{ .update_enum_ptr_with_val = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_val = tir_tag_contents } };
-                            const inst_ref = try s.append_inst(inst);
-                            try s.air_tir_inst_map.put(air_ref, inst_ref);
-                        },
-                        _ => {
-                            const contents_type = s.tir.values.get(@intFromEnum(contents_type_ref));
-                            if (contents_type != .ptr_typ) {
-                                unreachable;
-                            }
-                            if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false) {
-                                return error.MismatchedEnumFieldType;
-                            }
-
-                            const inst = TirInst{ .update_enum_ptr_with_ptr = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_ptr = tir_tag_contents } };
-                            const inst_ref = try s.append_inst(inst);
-                            try s.air_tir_inst_map.put(air_ref, inst_ref);
-                            // One level of indirection via pointer is a stack struct or enum
-                            // switch (contents_type.ptr) {
-                            //     .typ_typ => return error.Unimplemented,
-                            //     .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ => return error.Unimplemented,
-                            //     _ => {
-                            //         const pointed_to_typ = t.types.get(@intFromEnum(contents_type));
-                            //     },
-                            // }
-
-                        },
-                    }
-                }
-            },
-
-            .get_element_ptr => |air_extra| {
-                const air_get_elem = s.air.get_extra_struct(AirInst.GetElementPtr, air_extra);
-                const tir_aggregate_inst = try s.get_inst_mapping(air_get_elem.aggregate_ptr);
-
-                // print("Tir aggregrate inst {}\n", .{tir_aggregate_inst});
-                const tir_aggregate_ptr_ref = try get_tir_inst_ret_type(s, tir_aggregate_inst);
-                const tir_aggregrate_ptr_type = s.tir.values.get(@intFromEnum(tir_aggregate_ptr_ref));
-
-                if (tir_aggregrate_ptr_type != .ptr_typ) {
-                    print("Expected pointer to aggregrate, got {} from {}\n", .{ tir_aggregrate_ptr_type, tir_aggregate_inst });
-                    return error.Unimplemented;
-                }
-
-                const tir_aggregate_type = tir_aggregrate_ptr_type.ptr_typ.deref_type;
-                const tir_struct = try get_aggregate_type(s, tir_aggregate_type, false);
-                const access_field_indeces_start: Tir.ExtraIndex = @intCast(s.tir.extra.items.len);
-
-                var cur_access_field = air_get_elem.fields.start;
-                var field_type: ?Value.IndexRef = null;
-                while (cur_access_field < air_get_elem.fields.end) : (cur_access_field += 1) {
-                    const access_field_name: Air.StringIndex = s.air.extra.items[cur_access_field];
-                    // const field_index
-
-                    // The numerical index of the field access. If the the field is the first in
-                    // in the aggregate, this would 0, second would be 1 etc.
-                    var access_field_index: ?u32 = null;
-
-                    // TODO, change tir_struct for multiple field accesses.
-                    var struct_field_index = tir_struct.fields_start;
-                    while (struct_field_index < tir_struct.fields_end) : (struct_field_index += 1) {
-                        const cur_field = s.tir.values.get(struct_field_index);
-                        switch (cur_field) {
-                            .struct_field_typ, .mut_struct_field_typ => |struct_field| {
-                                if (struct_field.var_name == access_field_name) {
-                                    access_field_index = struct_field_index - tir_struct.fields_start;
-                                    field_type = struct_field.field_type;
-                                    break;
-                                }
-                            },
-                            else => unreachable,
                         }
-                    }
-
-                    if (access_field_index) |a_index| {
-                        // print(" ACCESS FIELD INDEX {} {}\n", .{ a_index, access_field_indeces_start });
-                        try s.tir.extra.append(a_index);
-                    } else {
-                        return error.UndefinedVar;
-                    }
+                        return error.InvalidFieldName;
+                    },
+                    else => return error.MismatchedTypes,
                 }
-                const access_field_indeces_end: Tir.ExtraIndex = @intCast(s.tir.extra.items.len);
-                const ptr_to_field_type = try s.append_val(Value{ .ptr_typ = .{ .deref_type = field_type.?, .cap = .ref_typ } });
-
-                const tir_get_elem = TirInst{ .get_element_ptr = .{ .aggregate_ptr = tir_aggregate_inst, .aggregate_type = tir_aggregate_type, .indeces_start = access_field_indeces_start, .indeces_end = access_field_indeces_end, .ret_type = @enumFromInt(ptr_to_field_type) } };
-                const tir_get_elem_inst = try s.append_inst(tir_get_elem);
-                try s.air_tir_inst_map.put(air_ref, tir_get_elem_inst);
             },
+            // .update_enum_ptr => |air_update_enum| {
+            //     const tir_enum_ptr_inst = try s.get_inst_mapping(air_update_enum.ptr);
+            //     const tir_enum_ptr_type = try get_tir_inst_ret_type(s, tir_enum_ptr_inst);
+
+            //     const tir_enum_type = s.tir.values.get(@intFromEnum(tir_enum_ptr_type)).ptr_typ.deref_type;
+            //     const tir_enum = try get_aggregate_type(s, tir_enum_type, true);
+
+            //     // TODO: Use get_enum_field
+            //     var tag: u32 = undefined;
+            //     var tag_field_type: Value.IndexRef = undefined;
+            //     var enum_field_index = tir_enum.fields_start;
+            //     while (enum_field_index < tir_enum.fields_end) : (enum_field_index += 1) {
+            //         const cur_field = s.tir.values.get(enum_field_index);
+            //         switch (cur_field) {
+            //             .enum_field_typ,
+            //             => |enum_field| {
+            //                 if (enum_field.var_name == air_update_enum.new_tag) {
+            //                     tag = enum_field_index - tir_enum.fields_start;
+            //                     tag_field_type = enum_field.field_type;
+            //                     break;
+            //                 }
+            //             },
+            //             else => unreachable,
+            //         }
+            //     }
+
+            //     const tir_tag_contents = try s.get_inst_mapping(air_update_enum.tag_contents);
+            //     // TODO: This will remove booleans
+            //     const tir_tag_contents_val = get_val_index(s, tir_tag_contents) catch null;
+            //     if (tir_tag_contents_val) |val_index| {
+            //         const val_type = try get_val_type(s, val_index);
+            //         if (type_ref_eq(s, val_type, tag_field_type, true) == false) {
+            //             return error.MismatchedEnumFieldType;
+            //         }
+
+            //         const inst = TirInst{ .update_enum_ptr_with_val = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_val = tir_tag_contents } };
+            //         const inst_ref = try s.append_inst(inst);
+            //         try s.air_tir_inst_map.put(air_ref, inst_ref);
+            //     } else {
+            //         const contents_type_ref = try get_tir_inst_ret_type(s, tir_tag_contents);
+            //         switch (contents_type_ref) {
+            //             .typ_typ => return error.Unimplemented,
+            //             .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ, .void_typ, .own_typ, .ref_typ, .stackref_typ, .opaque_typ => {
+            //                 if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false) {
+            //                     return error.MismatchedEnumFieldType;
+            //                 }
+
+            //                 const inst = TirInst{ .update_enum_ptr_with_val = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_val = tir_tag_contents } };
+            //                 const inst_ref = try s.append_inst(inst);
+            //                 try s.air_tir_inst_map.put(air_ref, inst_ref);
+            //             },
+            //             _ => {
+            //                 const contents_type = s.tir.values.get(@intFromEnum(contents_type_ref));
+            //                 if (contents_type != .ptr_typ) {
+            //                     unreachable;
+            //                 }
+            //                 if (type_ref_eq(s, contents_type_ref, tag_field_type, false) == false) {
+            //                     return error.MismatchedEnumFieldType;
+            //                 }
+
+            //                 const inst = TirInst{ .update_enum_ptr_with_ptr = .{ .enum_ptr = tir_enum_ptr_inst, .enum_type = tir_enum_type, .new_tag = tag, .new_tag_ptr = tir_tag_contents } };
+            //                 const inst_ref = try s.append_inst(inst);
+            //                 try s.air_tir_inst_map.put(air_ref, inst_ref);
+            //                 // One level of indirection via pointer is a stack struct or enum
+            //                 // switch (contents_type.ptr) {
+            //                 //     .typ_typ => return error.Unimplemented,
+            //                 //     .boolean_typ, .unknown_int_typ, .u64_typ, .u32_typ, .u16_typ, .u8_typ, .i64_typ, .i32_typ, .i16_typ, .i8_typ => return error.Unimplemented,
+            //                 //     _ => {
+            //                 //         const pointed_to_typ = t.types.get(@intFromEnum(contents_type));
+            //                 //     },
+            //                 // }
+
+            //             },
+            //         }
+            //     }
+            // },
+
+            // .get_element_ptr => |air_extra| {
+            //     const air_get_elem = s.air.get_extra_struct(AirInst.GetElementPtr, air_extra);
+            //     const tir_aggregate_inst = try s.get_inst_mapping(air_get_elem.aggregate_ptr);
+
+            //     // print("Tir aggregrate inst {}\n", .{tir_aggregate_inst});
+            //     const tir_aggregate_ptr_ref = try get_tir_inst_ret_type(s, tir_aggregate_inst);
+            //     const tir_aggregrate_ptr_type = s.tir.values.get(@intFromEnum(tir_aggregate_ptr_ref));
+
+            //     if (tir_aggregrate_ptr_type != .ptr_typ) {
+            //         print("Expected pointer to aggregrate, got {} from {}\n", .{ tir_aggregrate_ptr_type, tir_aggregate_inst });
+            //         return error.Unimplemented;
+            //     }
+
+            //     const tir_aggregate_type = tir_aggregrate_ptr_type.ptr_typ.deref_type;
+            //     const tir_struct = try get_aggregate_type(s, tir_aggregate_type, false);
+            //     const access_field_indeces_start: Tir.ExtraIndex = @intCast(s.tir.extra.items.len);
+
+            //     var cur_access_field = air_get_elem.fields.start;
+            //     var field_type: ?Value.IndexRef = null;
+            //     while (cur_access_field < air_get_elem.fields.end) : (cur_access_field += 1) {
+            //         const access_field_name: Air.StringIndex = s.air.extra.items[cur_access_field];
+            //         // const field_index
+
+            //         // The numerical index of the field access. If the the field is the first in
+            //         // in the aggregate, this would 0, second would be 1 etc.
+            //         var access_field_index: ?u32 = null;
+
+            //         // TODO, change tir_struct for multiple field accesses.
+            //         var struct_field_index = tir_struct.fields_start;
+            //         while (struct_field_index < tir_struct.fields_end) : (struct_field_index += 1) {
+            //             const cur_field = s.tir.values.get(struct_field_index);
+            //             switch (cur_field) {
+            //                 .field_typ, .mut_field_typ => |struct_field| {
+            //                     if (struct_field.var_name == access_field_name) {
+            //                         access_field_index = struct_field_index - tir_struct.fields_start;
+            //                         field_type = struct_field.field_type;
+            //                         break;
+            //                     }
+            //                 },
+            //                 else => unreachable,
+            //             }
+            //         }
+
+            //         if (access_field_index) |a_index| {
+            //             // print(" ACCESS FIELD INDEX {} {}\n", .{ a_index, access_field_indeces_start });
+            //             try s.tir.extra.append(a_index);
+            //         } else {
+            //             return error.UndefinedVar;
+            //         }
+            //     }
+            //     const access_field_indeces_end: Tir.ExtraIndex = @intCast(s.tir.extra.items.len);
+            //     const ptr_to_field_type = try s.append_val(Value{ .ptr_typ = .{ .deref_type = field_type.?, .cap = .ref_typ } });
+
+            //     const tir_get_elem = TirInst{ .get_element_ptr = .{ .aggregate_ptr = tir_aggregate_inst, .aggregate_type = tir_aggregate_type, .indeces_start = access_field_indeces_start, .indeces_end = access_field_indeces_end, .ret_type = @enumFromInt(ptr_to_field_type) } };
+            //     const tir_get_elem_inst = try s.append_inst(tir_get_elem);
+            //     try s.air_tir_inst_map.put(air_ref, tir_get_elem_inst);
+            // },
             .match => |air_match| {
                 const tir_enum_ptr_inst = try s.get_inst_mapping(@enumFromInt(air_match.enum_ptr));
                 const tir_enum_ptr_type = try get_tir_inst_ret_type(s, tir_enum_ptr_inst);
@@ -1551,7 +1572,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 // It is a pointer to the data structure of the tag projecting into.
                 const cur_field_index = tir_enum.fields_start + tag;
                 const cur_field = s.tir.values.get(cur_field_index);
-                const field_type = cur_field.enum_field_typ.field_type;
+                const field_type = cur_field.field_typ.field_type;
                 const type_index = try s.append_val(Value{ .ptr_typ = .{ .deref_type = field_type, .cap = .ref_typ } });
 
                 // Finally, append the instruction.
@@ -1891,7 +1912,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
             .deref => |air_deref| {
                 const tir_deref_target = try s.get_inst_mapping(air_deref);
                 const target_type_ref = try get_tir_inst_ret_type(s, tir_deref_target);
-                if (target_type_ref.is_ref() == false) {
+                if (target_type_ref.is_index() == false) {
                     return error.DerefOnPrimitive;
                 } else {
                     const target_type = s.tir.values.get(@intFromEnum(target_type_ref));
@@ -1959,8 +1980,8 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 const tir_array = try s.append_inst(.{ .zero_array = tir_array_type });
                 try s.air_tir_inst_map.put(air_ref, tir_array);
             },
-            .load => |air_load| {
-                const tir_ptr = try s.get_inst_mapping(air_load.ptr);
+            .get => |air_get| {
+                const tir_ptr = try s.get_inst_mapping(air_get.src);
                 const tir_ptr_type = try get_tir_inst_ret_type(s, tir_ptr);
                 // print("Loading from inst {} with type {}\n", .{ tir_ptr, tir_ptr_type });
                 switch (tir_ptr_type) {
@@ -1972,7 +1993,7 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                         switch (tir_type) {
                             .ptr_typ => |ptr| {
                                 var tir_load_type: Value.IndexRef = undefined;
-                                if (air_load.cap == .own) {
+                                if (air_get.cap == .own) {
                                     tir_load_type = ptr.deref_type;
                                 } else {
                                     const copy_equiv_ref = try gen_copy_equiv_type(s, tir_ptr_type);
