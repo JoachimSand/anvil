@@ -66,6 +66,16 @@ fn buildExample(b: *std.Build, target: std.Build.ResolvedTarget, i: BuildInfo) v
 
     b.installArtifact(exe);
 
+    const exe_check = b.addExecutable(.{
+        .name = i.filename(),
+        .root_source_file = .{ .path = i.filepath },
+        .target = target,
+        .optimize = i.optimize,
+    });
+
+    const check = b.step("check", "Check if foo compiles");
+    check.dependOn(&exe_check.step);
+
     const run_cmd = b.addRunArtifact(exe);
 
     run_cmd.step.dependOn(b.getInstallStep());

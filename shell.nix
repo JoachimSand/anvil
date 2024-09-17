@@ -12,5 +12,6 @@ in
     ];
     shellHook = ''
       export LIBCLANG_PATH="${pkgs.llvmPackages.libclang}/lib";
+      fish
     '';
   }
