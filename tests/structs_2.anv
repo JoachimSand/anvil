@@ -4,7 +4,7 @@ BinNode := struct {
 };
 
 fn test() -> void {
-	mut node := BinNode.{a = 93; b = 94; };
+	mut node1 := BinNode.{a = 93; b = 94; };
 	node2 := BinNode.{a = 98; b = 99; };
-	node = node2;
+	node1 = node2;
 }

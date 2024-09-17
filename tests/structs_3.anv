@@ -1,5 +1,31 @@
-
-LLNode := struct {
-	val : u32;
-	next : &.own LLNode;
+Position := struct {
+	x : i32;
+	y : i32;	
 };
+
+Planet := struct {
+	radius : u32;
+	population : u32;
+	pos : Position;
+};
+
+fn test() -> void {
+	mut lv_426 := Planet.{
+		radius = 1200;
+		population = 158;
+		pos = Position.{
+			x = 100;
+			y = 200;
+		};
+	};
+	mars := Planet.{
+		radius = 3389;
+		population = 0;
+		pos = Position.{
+			x = 300;
+			y = 400;
+		};
+	};
+	lv_426.pos.x = 20;
+	// lv_426.population = mars.population;
+}
