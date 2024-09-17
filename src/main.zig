@@ -66,12 +66,11 @@ pub fn main() !void {
     var air_state = try air_mod.new_air_state(&ast);
     defer air_state.deinit();
 
-    const air = try air_mod.air_gen(&air_state);
-    _ = air;
+    var air = try air_mod.air_gen(&air_state);
     // We can now free the parser contents: tokens, nodes etc.
 
-    // var tir = try tir_mod.tir_gen(&air, air.allocator);
-    // defer tir.deinit();
+    var tir = try tir_mod.tir_gen(&air, air.allocator);
+    defer tir.deinit();
     // _ = try safety_mod.check_safety(&tir);
 
     // try llvm_gen.generate_llvm_ir(&tir);
