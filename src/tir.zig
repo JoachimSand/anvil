@@ -394,6 +394,7 @@ const TirSpecificError = error{
     StoringWrongType,
     StoringOwnTypeWithoutMove,
     MemfreeOnInvalidType,
+    MultipleTagInitialization,
     MismatchedEnumFieldType,
     MismatchedTypes,
     TypeMustBeComptime,
@@ -1375,6 +1376,30 @@ fn tir_gen_container_def(s: *TirState, air_container: AirInst.ContainerDef, air_
     return tir_inst;
 }
 
+// field_init_index: The AIR instruction field init being mapped to TIR.
+fn tir_gen_field(s: *TirState, container_alloc: TirInst.Index, container_typ: Value.IndexRef, field_init_bare: AirInst.List.Elem.Bare, field_init_index: AirInst.Index) !void {
+    // Determine the field ID of the field being initialised.
+    const field_init = field_init_bare.field_init;
+    const field_name = s.air.instructions.get(field_init.field_type.get_index()).get_field_type.field_name;
+    const field_id = try s.get_field_id(container_typ, field_name);
+
+    // Determine the type of the field and type of the value being assigned to it.
+    // Ensure these types match.
+    const field_typ = try s.get_field_type(container_typ, field_name);
+    const expr = if (field_init.expr.is_index() == false) return error.Unimplemented else try s.get_inst_mapping(field_init.expr.get_index());
+    const expr_typ = try get_tir_inst_ret_type(s, expr);
+    if (types_are_equal(s, field_typ, expr_typ, false, true) == false) {
+        return error.MismatchedTypes;
+    }
+
+    // Append instructions to store the initialiser expression. Map the air field_init instruction to the
+    // value of the expression assigned to it.
+    const field_ret_type = try s.intern_val(Value{ .ptr_typ = .{ .deref_type = field_typ, .cap = .ref_typ } });
+    const field_ptr = try s.append_inst(.{ .field_ptr = .{ .container_ptr = container_alloc, .field_id = field_id, .ret_type = field_ret_type } });
+    _ = try s.append_inst(.{ .store = .{ .val = expr, .ptr = field_ptr } });
+    try s.set_inst_mapping(field_init_index, expr);
+}
+
 fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) TirError!TirInst.Index {
     var air_index: u32 = air_bb_start;
     const air_instructions = s.air.instructions.slice();
@@ -1526,6 +1551,10 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                 const ret_type = try s.intern_val(.{ .ptr_typ = .{ .deref_type = container_typ, .cap = .stackref_typ } });
                 const tir_alloc = try s.append_inst_mapping(air_index, .{ .alloca = .{ .alloc_type = container_typ, .ret_type = ret_type } });
 
+                if (container_typ.is_index() == false) {
+                    return error.MismatchedTypes;
+                }
+
                 const container_typ_val = s.tir.values.get(container_typ.get_index());
                 switch (container_typ_val) {
                     .struct_typ => |s_typ| {
@@ -1535,33 +1564,43 @@ fn tir_gen_bb(s: *TirState, air_bb_start: AirInst.Index, ret_on_fn_def: bool) Ti
                         }
 
                         const field_inits = s.air.get_fields(air_index, s_typ.fields_count);
-                        for (field_inits.data) |air_bare| {
-                            // Determine the field ID of the field being initialised.
-                            const field_init = air_bare.field_init;
-                            const field_name = air_instructions.get(field_init.field_type.get_index()).get_field_type.field_name;
-                            const field_id = try s.get_field_id(container_typ, field_name);
+                        for (field_inits.data, 0..) |air_bare, i| {
+                            try tir_gen_field(s, tir_alloc, container_typ, air_bare, @intCast(air_index + i + 1));
+                            // // Determine the field ID of the field being initialised.
+                            // const field_init = air_bare.field_init;
+                            // const field_name = air_instructions.get(field_init.field_type.get_index()).get_field_type.field_name;
+                            // const field_id = try s.get_field_id(container_typ, field_name);
 
-                            // Determine the type of the field and type of the value being assigned to it.
-                            // Ensure these types match.
-                            const field_typ = try s.get_field_type(container_typ, field_name);
-                            const expr = if (field_init.expr.is_index() == false) return error.Unimplemented else try s.get_inst_mapping(field_init.expr.get_index());
-                            const expr_typ = try get_tir_inst_ret_type(s, expr);
-                            if (types_are_equal(s, field_typ, expr_typ, false, true) == false) {
-                                return error.MismatchedTypes;
-                            }
+                            // // Determine the type of the field and type of the value being assigned to it.
+                            // // Ensure these types match.
+                            // const field_typ = try s.get_field_type(container_typ, field_name);
+                            // const expr = if (field_init.expr.is_index() == false) return error.Unimplemented else try s.get_inst_mapping(field_init.expr.get_index());
+                            // const expr_typ = try get_tir_inst_ret_type(s, expr);
+                            // if (types_are_equal(s, field_typ, expr_typ, false, true) == false) {
+                            //     return error.MismatchedTypes;
+                            // }
 
-                            // Append instructions to store the initialiser expression. Map the air field_init instruction to the
-                            // value of the expression assigned to it.
-                            const field_ret_type = try s.intern_val(Value{ .ptr_typ = .{ .deref_type = field_typ, .cap = .ref_typ } });
-                            const field_ptr = try s.append_inst(.{ .field_ptr = .{ .container_ptr = tir_alloc, .field_id = field_id, .ret_type = field_ret_type } });
-                            _ = try s.append_inst(.{ .store = .{ .val = expr, .ptr = field_ptr } });
-                            try s.set_inst_mapping(air_index + field_id + 1, expr);
+                            // // Append instructions to store the initialiser expression. Map the air field_init instruction to the
+                            // // value of the expression assigned to it.
+                            // const field_ret_type = try s.intern_val(Value{ .ptr_typ = .{ .deref_type = field_typ, .cap = .ref_typ } });
+                            // const field_ptr = try s.append_inst(.{ .field_ptr = .{ .container_ptr = tir_alloc, .field_id = field_id, .ret_type = field_ret_type } });
+                            // _ = try s.append_inst(.{ .store = .{ .val = expr, .ptr = field_ptr } });
+                            // try s.set_inst_mapping(air_index + field_id + 1, expr);
                         }
                         // Skip the field_inits we have already processed.
-                        air_index = air_index + s_typ.fields_count;
+                        air_index = air_index + c_init.field_init_count;
                     },
                     .enum_typ => |_| {
-                        return error.Unimplemented;
+                        // TODO: Tag initialize. Specialised instruction like previously?
+                        if (c_init.field_init_count != 1) {
+                            return error.MultipleTagInitialization;
+                        }
+
+                        const field_init_bare = s.air.get_fields(air_index, 1);
+                        try tir_gen_field(s, tir_alloc, container_typ, field_init_bare.data[0], 0);
+
+                        // Skip the field_inits we have already processed.
+                        air_index = air_index + c_init.field_init_count;
                     },
                     else => unreachable,
                 }

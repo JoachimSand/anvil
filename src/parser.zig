@@ -115,18 +115,13 @@ pub const Node = union(enum) {
     enum_definition_empty: struct {
         enum_keyword: Token.Index,
     },
-    enum_literal: struct {
-        enum_target: Index,
-        active_identifier: Token.Index,
-        expr: Index,
-    },
 
-    struct_literal: struct {
+    container_literal: struct {
         target_type: Index,
         assignments_start: ExtraIndex,
         assignments_end: ExtraIndex,
     },
-    struct_literal_empty: struct {
+    container_literal_empty: struct {
         target_type: Index,
     },
 
@@ -1104,15 +1099,15 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     }
                     _ = try p.expect_token(.r_brace);
 
-                    var struct_node: Node = undefined;
+                    var container_node: Node = undefined;
                     if (assignments) |a| {
                         const slice = try p.pop_scratch_to_extra(a.len);
-                        struct_node = Node{ .struct_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
+                        container_node = Node{ .container_literal = .{ .target_type = primary, .assignments_start = slice.start, .assignments_end = slice.end } };
                     } else {
-                        struct_node = Node{ .struct_literal_empty = .{ .target_type = primary } };
+                        container_node = Node{ .container_literal_empty = .{ .target_type = primary } };
                     }
 
-                    primary = try p.append_node(struct_node);
+                    primary = try p.append_node(container_node);
                 } else if (peek.type == .identifier) {
                     // Field access
                     const field_tok = p.next_token() catch undefined;
@@ -1122,17 +1117,17 @@ fn parse_postfix_expr_w_prim(p: *Parser, pre_parsed_primary: Node.Index) ParseEr
                     return error.UnexpectedToken;
                 }
             },
-            .colon2 => {
-                // enum literal
-                _ = p.next_token() catch undefined;
-                const active_id = try p.expect_token(.identifier);
-                _ = try p.expect_token(.l_brace);
-                const expr = try parse_expr(p, 0);
-                _ = try p.expect_token(.r_brace);
+            // .colon2 => {
+            //     // enum literal
+            //     _ = p.next_token() catch undefined;
+            //     const active_id = try p.expect_token(.identifier);
+            //     _ = try p.expect_token(.l_brace);
+            //     const expr = try parse_expr(p, 0);
+            //     _ = try p.expect_token(.r_brace);
 
-                const enum_lit = Node{ .enum_literal = .{ .enum_target = primary, .active_identifier = active_id.index, .expr = expr } };
-                primary = try p.append_node(enum_lit);
-            },
+            //     const enum_lit = Node{ .enum_literal = .{ .enum_target = primary, .active_identifier = active_id.index, .expr = expr } };
+            //     primary = try p.append_node(enum_lit);
+            // },
 
             .l_bracket => {
                 const l_bracket = p.next_token() catch undefined;

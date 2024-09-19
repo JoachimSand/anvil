@@ -129,7 +129,7 @@ pub const AirInst = union(enum) {
             }
         }
     };
-    const List = MultiArrayList(AirInst);
+    pub const List = MultiArrayList(AirInst);
     const Slice = List.Slice.All;
 
     const ExtraSlice = packed struct {
@@ -898,9 +898,9 @@ fn air_gen_expr(s: *AirState, index: Node.Index, dest_id: ?Air.StringIndex, get_
         },
         .enum_definition => |s_def| {
             const d_indeces = s.ast.extra.items[s_def.statements_start..s_def.statements_end];
-            return air_gen_container_def(s, d_indeces, dest_id, true);
+            return air_gen_container_def(s, d_indeces, dest_id, false);
         },
-        .struct_literal => |struct_lit| {
+        .container_literal => |struct_lit| {
             const container_type = try air_gen_expr(s, struct_lit.target_type, null, .ref, true);
 
             // Generate AIR for each individual assignment in the literal.
@@ -937,24 +937,6 @@ fn air_gen_expr(s: *AirState, index: Node.Index, dest_id: ?Air.StringIndex, get_
             try s.pop_scratch_insts(field_init_count);
 
             return inst;
-        },
-        .enum_literal => |enum_lit| {
-            // Type of the enum we are instantiating an instance of
-            const enum_target = try air_gen_expr(s, enum_lit.enum_target, dest_id, get_cap, r_value);
-            // const new_expr = try air_gen_expr(s, enum_lit.expr, dest_id, get_cap, l_val);
-
-            // The active tag name
-            // const active_tag = try s.intern_token(enum_lit.active_identifier);
-            var enum_alloc: AirInst.IndexRef = undefined;
-            // if (alloc_inst) |inst| {
-            //     enum_alloc = inst;
-            // } else {
-            enum_alloc = try s.append_inst(AirInst{ .alloca_mut = .{ .type = enum_target } });
-            // }
-
-            // const update_enum = AirInst{ .update_enum_ptr = .{ .ptr = enum_alloc, .new_tag = active_tag, .tag_contents = new_expr } };
-            // _ = try s.append_inst(update_enum);
-            return enum_alloc;
         },
         .fn_call_full => |fn_call_extra| {
             return air_gen_fn_call(s, fn_call_extra, get_cap, dest_id);
