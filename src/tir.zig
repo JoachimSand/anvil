@@ -303,17 +303,14 @@ pub const TirInst = union(enum) {
     //     cap: IndexRef,
     //     ptr_type: Value.IndexRef,
     // },
-    update_enum_ptr_with_val: struct {
+    // Updates an enum at a given memory location with a specific tag
+    // and its relevant contents.
+    update_enum_ptr: struct {
         enum_ptr: Index,
         enum_type: Value.IndexRef,
         new_tag: u32,
-        new_tag_val: Index,
-    },
-    update_enum_ptr_with_ptr: struct {
-        enum_ptr: Index,
-        enum_type: Value.IndexRef,
-        new_tag: u32,
-        new_tag_ptr: Index,
+        // Accepts either pointer or by-value
+        new_tag_contents: Index,
     },
     // get_element_ptr: struct {
     //     aggregate_ptr: IndexRef,
@@ -858,17 +855,17 @@ pub fn print_tir(t: *Tir, start: u32, stop: u32, indent: u32) !void {
             //         print("{}, ", .{s});
             //     }
             // },
-            .update_enum_ptr_with_val => |update_enum| {
+            // .update_enum_ptr_with_val => |update_enum| {
+            //     // update_enum.new_tag_val
+            //     print("update_enum_ptr_with_val ", .{});
+            //     try print_type(t, update_enum.enum_type);
+            //     print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_val });
+            // },
+            .update_enum_ptr => |update_enum| {
                 // update_enum.new_tag_val
-                print("update_enum_ptr_with_val ", .{});
+                print("update_enum_ptr ", .{});
                 try print_type(t, update_enum.enum_type);
-                print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_val });
-            },
-            .update_enum_ptr_with_ptr => |update_enum| {
-                // update_enum.new_tag_val
-                print("update_enum_ptr_with_ptr ", .{});
-                try print_type(t, update_enum.enum_type);
-                print(", {}, tagnum {}, {}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_ptr });
+                print(", %{}, tagnum {}, %{}", .{ update_enum.enum_ptr, update_enum.new_tag, update_enum.new_tag_contents });
             },
             .field_ptr => |field_access| {
                 print("field_ptr {} {}, ret_type: ", .{ field_access.container_ptr, field_access.field_id });
@@ -1227,8 +1224,8 @@ fn get_tir_inst_ret_type(s: *TirState, inst_index: TirInst.Index) !Value.IndexRe
         // .address_of => |address_of| {
         //     return address_of.ptr_type;
         // },
-        .update_enum_ptr_with_ptr => |update_enum| return get_tir_inst_ret_type(s, update_enum.enum_ptr),
-        .update_enum_ptr_with_val => |update_enum| return get_tir_inst_ret_type(s, update_enum.enum_ptr),
+        .update_enum_ptr => |update_enum| return get_tir_inst_ret_type(s, update_enum.enum_ptr),
+        // .update_enum_ptr_with_val => |update_enum| return get_tir_inst_ret_type(s, update_enum.enum_ptr),
         // .get_element_ptr => |get_elem_ptr| {
         //     return get_elem_ptr.ret_type;
         // },
@@ -1396,7 +1393,7 @@ fn tir_gen_field(s: *TirState, container_alloc: TirInst.Index, container_typ: Va
     // value of the expression assigned to it.
     const field_ret_type = try s.intern_val(Value{ .ptr_typ = .{ .deref_type = field_typ, .cap = .ref_typ } });
     if (is_enum) {
-        _ = try s.append_inst(.{ .update_enum_ptr_with_val = .{ .enum_ptr = container_alloc, .enum_type = container_typ, .new_tag = field_id, .new_tag_val = expr } });
+        _ = try s.append_inst(.{ .update_enum_ptr = .{ .enum_ptr = container_alloc, .enum_type = container_typ, .new_tag = field_id, .new_tag_contents = expr } });
     } else {
         const field_ptr = try s.append_inst(.{ .field_ptr = .{ .container_ptr = container_alloc, .field_id = field_id, .ret_type = field_ret_type } });
         _ = try s.append_inst(.{ .store = .{ .val = expr, .ptr = field_ptr } });
